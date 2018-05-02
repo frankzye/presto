@@ -62,6 +62,7 @@ public class StaticCatalogStore
         return catalogsLoaded.get();
     }
 
+    // TODO: need to rewrite for dynamic loading by user profile
     public void loadCatalogs()
             throws Exception
     {

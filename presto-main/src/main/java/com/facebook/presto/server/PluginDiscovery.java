@@ -40,22 +40,21 @@ import static java.nio.file.Files.createDirectories;
 import static java.nio.file.Files.walkFileTree;
 
 // This is a hack for development and does not support nested classes.
-final class PluginDiscovery
-{
+final class PluginDiscovery {
     private static final String CLASS_FILE_SUFFIX = ".class";
     private static final String SERVICES_FILE = "META-INF/services/" + Plugin.class.getName();
 
-    private PluginDiscovery() {}
+    private PluginDiscovery() {
+    }
 
     public static Set<String> discoverPlugins(Artifact artifact, ClassLoader classLoader)
-            throws IOException
-    {
+            throws IOException {
         if (!artifact.getExtension().equals("presto-plugin")) {
             throw new RuntimeException("Unexpected extension for main artifact: " + artifact);
         }
 
         File file = artifact.getFile();
-        if (!file.getPath().endsWith("/target/classes")) {
+        if (!file.getPath().endsWith("/target/classes") && !file.getPath().endsWith("\\target\\classes")) {
             throw new RuntimeException("Unexpected file for main artifact: " + file);
         }
         if (!file.isDirectory()) {
@@ -72,8 +71,7 @@ final class PluginDiscovery
     }
 
     public static void writePluginServices(Iterable<String> plugins, File root)
-            throws IOException
-    {
+            throws IOException {
         Path path = root.toPath().resolve(SERVICES_FILE);
         createDirectories(path.getParent());
         try (Writer out = new OutputStreamWriter(new FileOutputStream(path.toFile()), UTF_8)) {
@@ -84,14 +82,11 @@ final class PluginDiscovery
     }
 
     private static List<String> listClasses(Path base)
-            throws IOException
-    {
+            throws IOException {
         ImmutableList.Builder<String> list = ImmutableList.builder();
-        walkFileTree(base, new SimpleFileVisitor<Path>()
-        {
+        walkFileTree(base, new SimpleFileVisitor<Path>() {
             @Override
-            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
-            {
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) {
                 if (file.getFileName().toString().endsWith(CLASS_FILE_SUFFIX)) {
                     String name = file.subpath(base.getNameCount(), file.getNameCount()).toString();
                     list.add(javaName(name.substring(0, name.length() - CLASS_FILE_SUFFIX.length())));
@@ -102,8 +97,7 @@ final class PluginDiscovery
         return list.build();
     }
 
-    private static List<String> classInterfaces(String name, ClassLoader classLoader)
-    {
+    private static List<String> classInterfaces(String name, ClassLoader classLoader) {
         ImmutableList.Builder<String> list = ImmutableList.builder();
         ClassReader reader = readClass(name, classLoader);
         for (String binaryName : reader.getInterfaces()) {
@@ -115,26 +109,22 @@ final class PluginDiscovery
         return list.build();
     }
 
-    private static ClassReader readClass(String name, ClassLoader classLoader)
-    {
+    private static ClassReader readClass(String name, ClassLoader classLoader) {
         try (InputStream in = classLoader.getResourceAsStream(binaryName(name) + CLASS_FILE_SUFFIX)) {
             if (in == null) {
                 throw new RuntimeException("Failed to read class: " + name);
             }
             return new ClassReader(toByteArray(in));
-        }
-        catch (IOException e) {
+        } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
     }
 
-    private static String binaryName(String javaName)
-    {
+    private static String binaryName(String javaName) {
         return javaName.replace('.', '/');
     }
 
-    private static String javaName(String binaryName)
-    {
+    private static String javaName(String binaryName) {
         return binaryName.replace('/', '.');
     }
 }

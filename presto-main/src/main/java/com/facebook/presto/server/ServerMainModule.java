@@ -452,6 +452,9 @@ public class ServerMainModule
                 .addProperty("coordinator", String.valueOf(serverConfig.isCoordinator()))
                 .addProperty("connectorIds", nullToEmpty(serverConfig.getDataSources()));
 
+        // yeruan custom resource
+        jaxrsBinder(binder).bind(UserConnectorResource.class);
+
         // server info resource
         jaxrsBinder(binder).bind(ServerInfoResource.class);
         jsonCodecBinder(binder).bindJsonCodec(ServerInfo.class);
