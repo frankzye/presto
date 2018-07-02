@@ -28,6 +28,7 @@ import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.DomainTranslator;
 import com.facebook.presto.sql.planner.ExpressionInterpreter;
+import com.facebook.presto.sql.planner.LiteralEncoder;
 import com.facebook.presto.sql.planner.LookupSymbolResolver;
 import com.facebook.presto.sql.planner.Partitioning;
 import com.facebook.presto.sql.planner.PartitioningScheme;
@@ -131,10 +132,12 @@ public class AddExchanges
 {
     private final SqlParser parser;
     private final Metadata metadata;
+    private final DomainTranslator domainTranslator;
 
     public AddExchanges(Metadata metadata, SqlParser parser)
     {
         this.metadata = metadata;
+        this.domainTranslator = new DomainTranslator(new LiteralEncoder(metadata.getBlockEncodingSerde()));
         this.parser = parser;
     }
 
@@ -546,7 +549,7 @@ public class AddExchanges
             // expensive to evaluate in the call to shouldPrune below.
             Expression constraint = combineConjuncts(
                     deterministicPredicate,
-                    DomainTranslator.toPredicate(newDomain.simplify().transform(assignments::get)));
+                    domainTranslator.toPredicate(newDomain.simplify().transform(assignments::get)));
 
             LayoutConstraintEvaluator evaluator = new LayoutConstraintEvaluator(
                     session,
@@ -590,7 +593,7 @@ public class AddExchanges
                         PlanWithProperties result = new PlanWithProperties(tableScan, deriveProperties(tableScan, ImmutableList.of()));
 
                         Expression resultingPredicate = combineConjuncts(
-                                DomainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(assignments::get)),
+                                domainTranslator.toPredicate(layout.getUnenforcedConstraint().transform(assignments::get)),
                                 filterNonDeterministicConjuncts(predicate),
                                 decomposedPredicate.getRemainingExpression());
 
@@ -707,88 +710,114 @@ public class AddExchanges
             List<Symbol> rightSymbols = node.getCriteria().stream()
                     .map(JoinNode.EquiJoinClause::getRight)
                     .collect(toImmutableList());
-            JoinNode.Type type = node.getType();
-
-            PlanWithProperties left;
-            PlanWithProperties right;
 
             JoinNode.DistributionType distributionType = node.getDistributionType().orElseThrow(() -> new IllegalArgumentException("distributionType not yet set"));
-            if (distributionType == JoinNode.DistributionType.PARTITIONED) {
-                SetMultimap<Symbol, Symbol> rightToLeft = createMapping(rightSymbols, leftSymbols);
-                SetMultimap<Symbol, Symbol> leftToRight = createMapping(leftSymbols, rightSymbols);
 
-                left = node.getLeft().accept(this, PreferredProperties.partitioned(ImmutableSet.copyOf(leftSymbols)));
+            if (distributionType == JoinNode.DistributionType.REPLICATED) {
+                PlanWithProperties left = node.getLeft().accept(this, PreferredProperties.any());
 
-                if (left.getProperties().isNodePartitionedOn(leftSymbols) && !left.getProperties().isSingleNode()) {
-                    Partitioning rightPartitioning = left.getProperties().translate(createTranslator(leftToRight)).getNodePartitioning().get();
-                    right = node.getRight().accept(this, PreferredProperties.partitioned(rightPartitioning));
-                    if (!right.getProperties().isNodePartitionedWith(left.getProperties(), rightToLeft::get)) {
-                        right = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE, right.getNode(), new PartitioningScheme(rightPartitioning, right.getNode().getOutputSymbols())),
-                                right.getProperties());
-                    }
-                }
-                else {
-                    right = node.getRight().accept(this, PreferredProperties.partitioned(ImmutableSet.copyOf(rightSymbols)));
-
-                    if (right.getProperties().isNodePartitionedOn(rightSymbols) && !right.getProperties().isSingleNode()) {
-                        Partitioning leftPartitioning = right.getProperties().translate(createTranslator(rightToLeft)).getNodePartitioning().get();
-                        left = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE, left.getNode(), new PartitioningScheme(leftPartitioning, left.getNode().getOutputSymbols())),
-                                left.getProperties());
-                    }
-                    else {
-                        left = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE, left.getNode(), leftSymbols, Optional.empty()),
-                                left.getProperties());
-                        right = withDerivedProperties(
-                                partitionedExchange(idAllocator.getNextId(), REMOTE, right.getNode(), rightSymbols, Optional.empty()),
-                                right.getProperties());
-                    }
+                // use partitioned join if probe side is naturally partitioned on join symbols (e.g: because of aggregation)
+                if (!node.getCriteria().isEmpty()
+                        && left.getProperties().isNodePartitionedOn(leftSymbols) && !left.getProperties().isSingleNode()) {
+                    return planPartitionedJoin(node, leftSymbols, rightSymbols, left);
                 }
 
-                verify(left.getProperties().isNodePartitionedWith(right.getProperties(), leftToRight::get));
+                return planReplicatedJoin(node, left);
+            }
+            else {
+                return planPartitionedJoin(node, leftSymbols, rightSymbols);
+            }
+        }
 
-                // if colocated joins are disabled, force redistribute when using a custom partitioning
-                if (!isColocatedJoinEnabled(session) && hasMultipleSources(left.getNode(), right.getNode())) {
-                    Partitioning rightPartitioning = left.getProperties().translate(createTranslator(leftToRight)).getNodePartitioning().get();
+        private PlanWithProperties planPartitionedJoin(JoinNode node, List<Symbol> leftSymbols, List<Symbol> rightSymbols)
+        {
+            return planPartitionedJoin(node, leftSymbols, rightSymbols, node.getLeft().accept(this, PreferredProperties.partitioned(ImmutableSet.copyOf(leftSymbols))));
+        }
+
+        private PlanWithProperties planPartitionedJoin(JoinNode node, List<Symbol> leftSymbols, List<Symbol> rightSymbols, PlanWithProperties left)
+        {
+            SetMultimap<Symbol, Symbol> rightToLeft = createMapping(rightSymbols, leftSymbols);
+            SetMultimap<Symbol, Symbol> leftToRight = createMapping(leftSymbols, rightSymbols);
+
+            PlanWithProperties right;
+
+            if (left.getProperties().isNodePartitionedOn(leftSymbols) && !left.getProperties().isSingleNode()) {
+                Partitioning rightPartitioning = left.getProperties().translate(createTranslator(leftToRight)).getNodePartitioning().get();
+                right = node.getRight().accept(this, PreferredProperties.partitioned(rightPartitioning));
+                if (!right.getProperties().isNodePartitionedWith(left.getProperties(), rightToLeft::get)) {
                     right = withDerivedProperties(
                             partitionedExchange(idAllocator.getNextId(), REMOTE, right.getNode(), new PartitioningScheme(rightPartitioning, right.getNode().getOutputSymbols())),
                             right.getProperties());
                 }
             }
             else {
-                // Broadcast Join
-                left = node.getLeft().accept(this, PreferredProperties.any());
-                right = node.getRight().accept(this, PreferredProperties.any());
+                right = node.getRight().accept(this, PreferredProperties.partitioned(ImmutableSet.copyOf(rightSymbols)));
 
-                if (left.getProperties().isSingleNode()) {
-                    if (!right.getProperties().isSingleNode() ||
-                            (!isColocatedJoinEnabled(session) && hasMultipleSources(left.getNode(), right.getNode()))) {
-                        right = withDerivedProperties(
-                                gatheringExchange(idAllocator.getNextId(), REMOTE, right.getNode()),
-                                right.getProperties());
-                    }
+                if (right.getProperties().isNodePartitionedOn(rightSymbols) && !right.getProperties().isSingleNode()) {
+                    Partitioning leftPartitioning = right.getProperties().translate(createTranslator(rightToLeft)).getNodePartitioning().get();
+                    left = withDerivedProperties(
+                            partitionedExchange(idAllocator.getNextId(), REMOTE, left.getNode(), new PartitioningScheme(leftPartitioning, left.getNode().getOutputSymbols())),
+                            left.getProperties());
                 }
                 else {
+                    left = withDerivedProperties(
+                            partitionedExchange(idAllocator.getNextId(), REMOTE, left.getNode(), leftSymbols, Optional.empty()),
+                            left.getProperties());
                     right = withDerivedProperties(
-                            replicatedExchange(idAllocator.getNextId(), REMOTE, right.getNode()),
+                            partitionedExchange(idAllocator.getNextId(), REMOTE, right.getNode(), rightSymbols, Optional.empty()),
                             right.getProperties());
                 }
             }
 
+            verify(left.getProperties().isNodePartitionedWith(right.getProperties(), leftToRight::get));
+
+            // if colocated joins are disabled, force redistribute when using a custom partitioning
+            if (!isColocatedJoinEnabled(session) && hasMultipleSources(left.getNode(), right.getNode())) {
+                Partitioning rightPartitioning = left.getProperties().translate(createTranslator(leftToRight)).getNodePartitioning().get();
+                right = withDerivedProperties(
+                        partitionedExchange(idAllocator.getNextId(), REMOTE, right.getNode(), new PartitioningScheme(rightPartitioning, right.getNode().getOutputSymbols())),
+                        right.getProperties());
+            }
+
+            return buildJoin(node, left, right, JoinNode.DistributionType.PARTITIONED);
+        }
+
+        private PlanWithProperties planReplicatedJoin(JoinNode node, PlanWithProperties left)
+        {
+            // Broadcast Join
+            PlanWithProperties right = node.getRight().accept(this, PreferredProperties.any());
+
+            if (left.getProperties().isSingleNode()) {
+                if (!right.getProperties().isSingleNode() ||
+                        (!isColocatedJoinEnabled(session) && hasMultipleSources(left.getNode(), right.getNode()))) {
+                    right = withDerivedProperties(
+                            gatheringExchange(idAllocator.getNextId(), REMOTE, right.getNode()),
+                            right.getProperties());
+                }
+            }
+            else {
+                right = withDerivedProperties(
+                        replicatedExchange(idAllocator.getNextId(), REMOTE, right.getNode()),
+                        right.getProperties());
+            }
+
+            return buildJoin(node, left, right, JoinNode.DistributionType.REPLICATED);
+        }
+
+        private PlanWithProperties buildJoin(JoinNode node, PlanWithProperties newLeft, PlanWithProperties newRight, JoinNode.DistributionType newDistributionType)
+        {
             JoinNode result = new JoinNode(node.getId(),
-                    type,
-                    left.getNode(),
-                    right.getNode(),
+                    node.getType(),
+                    newLeft.getNode(),
+                    newRight.getNode(),
                     node.getCriteria(),
                     node.getOutputSymbols(),
                     node.getFilter(),
                     node.getLeftHashSymbol(),
                     node.getRightHashSymbol(),
-                    node.getDistributionType());
+                    Optional.of(newDistributionType));
 
-            return new PlanWithProperties(result, deriveProperties(result, ImmutableList.of(left.getProperties(), right.getProperties())));
+            return new PlanWithProperties(result, deriveProperties(result, ImmutableList.of(newLeft.getProperties(), newRight.getProperties())));
         }
 
         @Override

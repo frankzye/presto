@@ -17,6 +17,7 @@ import com.facebook.presto.Session;
 import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.Partitioning.ArgumentBinding;
 import com.facebook.presto.sql.planner.PartitioningScheme;
@@ -47,6 +48,7 @@ import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.FunctionCall;
+import com.facebook.presto.sql.tree.GenericLiteral;
 import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.QualifiedName;
 import com.facebook.presto.sql.tree.SymbolReference;
@@ -70,7 +72,6 @@ import java.util.function.Function;
 
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.sql.planner.LiteralInterpreter.toExpression;
 import static com.facebook.presto.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.plan.ChildReplacer.replaceChildren;
 import static com.facebook.presto.sql.planner.plan.JoinNode.Type.INNER;
@@ -159,7 +160,7 @@ public class HashGenerationOptimizer
         public PlanWithProperties visitAggregation(AggregationNode node, HashComputationSet parentPreference)
         {
             Optional<HashComputation> groupByHash = Optional.empty();
-            if (!canSkipHashGeneration(node.getGroupingKeys())) {
+            if (!node.isStreamable() && !canSkipHashGeneration(node.getGroupingKeys())) {
                 groupByHash = computeHash(node.getGroupingKeys());
             }
 
@@ -175,6 +176,7 @@ public class HashGenerationOptimizer
                             child.getNode(),
                             node.getAggregations(),
                             node.getGroupingSets(),
+                            node.getPreGroupedSymbols(),
                             node.getStep(),
                             hashSymbol,
                             node.getGroupIdSymbol()),
@@ -668,7 +670,16 @@ public class HashGenerationOptimizer
 
             boolean preferenceSatisfied;
             if (pruneExtraHashSymbols) {
-                preferenceSatisfied = result.getHashSymbols().keySet().equals(requiredHashes.getHashes());
+                // Make sure that
+                // (1) result has all required hashes
+                // (2) any extra hashes are preferred hashes (e.g. no pruning is needed)
+                Set<HashComputation> resultHashes = result.getHashSymbols().keySet();
+                Set<HashComputation> requiredAndPreferredHashes = ImmutableSet.<HashComputation>builder()
+                        .addAll(requiredHashes.getHashes())
+                        .addAll(preferredHashes.getHashes())
+                        .build();
+                preferenceSatisfied = resultHashes.containsAll(requiredHashes.getHashes())
+                    && requiredAndPreferredHashes.containsAll(resultHashes);
             }
             else {
                 preferenceSatisfied = result.getHashSymbols().keySet().containsAll(requiredHashes.getHashes());
@@ -859,7 +870,7 @@ public class HashGenerationOptimizer
 
         private Expression getHashExpression()
         {
-            Expression hashExpression = toExpression(INITIAL_HASH_VALUE, BIGINT);
+            Expression hashExpression = new GenericLiteral(StandardTypes.BIGINT, Integer.toString(INITIAL_HASH_VALUE));
             for (Symbol field : fields) {
                 hashExpression = getHashFunctionCall(hashExpression, field);
             }

@@ -14,9 +14,11 @@
 package com.facebook.presto.sql.analyzer;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.OperatorNotFoundException;
+import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.security.AccessControl;
 import com.facebook.presto.security.DenyAllAccessControl;
@@ -45,7 +47,9 @@ import com.facebook.presto.sql.tree.Cast;
 import com.facebook.presto.sql.tree.CharLiteral;
 import com.facebook.presto.sql.tree.CoalesceExpression;
 import com.facebook.presto.sql.tree.ComparisonExpression;
+import com.facebook.presto.sql.tree.CurrentPath;
 import com.facebook.presto.sql.tree.CurrentTime;
+import com.facebook.presto.sql.tree.CurrentUser;
 import com.facebook.presto.sql.tree.DecimalLiteral;
 import com.facebook.presto.sql.tree.DereferenceExpression;
 import com.facebook.presto.sql.tree.DoubleLiteral;
@@ -91,8 +95,10 @@ import com.facebook.presto.sql.tree.TryExpression;
 import com.facebook.presto.sql.tree.WhenClause;
 import com.facebook.presto.sql.tree.WindowFrame;
 import com.facebook.presto.type.FunctionType;
+import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Multimap;
 import io.airlift.slice.SliceUtf8;
 
 import javax.annotation.Nullable;
@@ -104,9 +110,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Function;
 
+import static com.facebook.presto.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static com.facebook.presto.spi.function.OperatorType.SUBSCRIPT;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -144,6 +152,7 @@ import static com.facebook.presto.type.UnknownType.UNKNOWN;
 import static com.facebook.presto.util.DateTimeUtils.parseTimestampLiteral;
 import static com.facebook.presto.util.DateTimeUtils.timeHasTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.timestampHasTimeZone;
+import static com.facebook.presto.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -163,6 +172,7 @@ public class ExpressionAnalyzer
     private final Function<Node, StatementAnalyzer> statementAnalyzerFactory;
     private final Map<Symbol, Type> symbolTypes;
     private final boolean isDescribe;
+    private final boolean legacyRowFieldOrdinalAccess;
 
     private final Map<NodeRef<FunctionCall>, Signature> resolvedFunctions = new LinkedHashMap<>();
     private final Set<NodeRef<SubqueryExpression>> scalarSubqueries = new LinkedHashSet<>();
@@ -176,6 +186,7 @@ public class ExpressionAnalyzer
     // For lambda argument references, maps each QualifiedNameReference to the referenced LambdaArgumentDeclaration
     private final Map<NodeRef<Identifier>, LambdaArgumentDeclaration> lambdaArgumentReferences = new LinkedHashMap<>();
     private final Set<NodeRef<FunctionCall>> windowFunctions = new LinkedHashSet<>();
+    private final Multimap<QualifiedObjectName, String> tableColumnReferences = HashMultimap.create();
 
     private final Session session;
     private final List<Expression> parameters;
@@ -196,6 +207,7 @@ public class ExpressionAnalyzer
         this.symbolTypes = ImmutableMap.copyOf(requireNonNull(symbolTypes, "symbolTypes is null"));
         this.parameters = requireNonNull(parameters, "parameters is null");
         this.isDescribe = isDescribe;
+        this.legacyRowFieldOrdinalAccess = isLegacyRowFieldOrdinalAccessEnabled(session);
     }
 
     public Map<NodeRef<FunctionCall>, Signature> getResolvedFunctions()
@@ -282,6 +294,11 @@ public class ExpressionAnalyzer
     public Set<NodeRef<FunctionCall>> getWindowFunctions()
     {
         return unmodifiableSet(windowFunctions);
+    }
+
+    public Multimap<QualifiedObjectName, String> getTableColumnReferences()
+    {
+        return tableColumnReferences;
     }
 
     private class Visitor
@@ -372,23 +389,27 @@ public class ExpressionAnalyzer
 
         private Type handleResolvedField(Expression node, ResolvedField resolvedField, StackableAstVisitorContext<Context> context)
         {
-            return handleResolvedField(node, FieldId.from(resolvedField), resolvedField.getType(), context);
+            return handleResolvedField(node, FieldId.from(resolvedField), resolvedField.getField(), context);
         }
 
-        private Type handleResolvedField(Expression node, FieldId fieldId, Type resolvedType, StackableAstVisitorContext<Context> context)
+        private Type handleResolvedField(Expression node, FieldId fieldId, Field field, StackableAstVisitorContext<Context> context)
         {
             if (context.getContext().isInLambda()) {
                 LambdaArgumentDeclaration lambdaArgumentDeclaration = context.getContext().getFieldToLambdaArgumentDeclaration().get(fieldId);
                 if (lambdaArgumentDeclaration != null) {
                     // Lambda argument reference is not a column reference
                     lambdaArgumentReferences.put(NodeRef.of((Identifier) node), lambdaArgumentDeclaration);
-                    return setExpressionType(node, resolvedType);
+                    return setExpressionType(node, field.getType());
                 }
+            }
+
+            if (field.getOriginTable().isPresent() && field.getName().isPresent()) {
+                tableColumnReferences.put(field.getOriginTable().get(), field.getName().get());
             }
 
             FieldId previous = columnReferences.put(NodeRef.of(node), fieldId);
             checkState(previous == null, "%s already known to refer to %s", node, previous);
-            return setExpressionType(node, resolvedType);
+            return setExpressionType(node, field.getType());
         }
 
         @Override
@@ -414,14 +435,23 @@ public class ExpressionAnalyzer
             }
 
             RowType rowType = (RowType) baseType;
+            String fieldName = node.getField().getValue();
 
             Type rowFieldType = null;
             for (RowType.Field rowField : rowType.getFields()) {
-                if (node.getField().getValue().equalsIgnoreCase(rowField.getName().orElse(null))) {
+                if (fieldName.equalsIgnoreCase(rowField.getName().orElse(null))) {
                     rowFieldType = rowField.getType();
                     break;
                 }
             }
+
+            if (legacyRowFieldOrdinalAccess && rowFieldType == null) {
+                OptionalInt rowIndex = parseAnonymousRowFieldOrdinalAccess(fieldName, rowType.getFields());
+                if (rowIndex.isPresent()) {
+                    rowFieldType = rowType.getFields().get(rowIndex.getAsInt()).getType();
+                }
+            }
+
             if (rowFieldType == null) {
                 throw missingAttributeException(node);
             }
@@ -672,8 +702,11 @@ public class ExpressionAnalyzer
         @Override
         protected Type visitGenericLiteral(GenericLiteral node, StackableAstVisitorContext<Context> context)
         {
-            Type type = typeManager.getType(parseTypeSignature(node.getType()));
-            if (type == null) {
+            Type type;
+            try {
+                type = typeManager.getType(parseTypeSignature(node.getType()));
+            }
+            catch (IllegalArgumentException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, "Unknown type: " + node.getType());
             }
 
@@ -706,7 +739,12 @@ public class ExpressionAnalyzer
         protected Type visitTimestampLiteral(TimestampLiteral node, StackableAstVisitorContext<Context> context)
         {
             try {
-                parseTimestampLiteral(session.getTimeZoneKey(), node.getValue());
+                if (SystemSessionProperties.isLegacyTimestamp(session)) {
+                    parseTimestampLiteral(session.getTimeZoneKey(), node.getValue());
+                }
+                else {
+                    parseTimestampLiteral(node.getValue());
+                }
             }
             catch (Exception e) {
                 throw new SemanticException(INVALID_LITERAL, node, "'%s' is not a valid timestamp literal", node.getValue());
@@ -867,6 +905,18 @@ public class ExpressionAnalyzer
         }
 
         @Override
+        protected Type visitCurrentUser(CurrentUser node, StackableAstVisitorContext<Context> context)
+        {
+            return setExpressionType(node, VARCHAR);
+        }
+
+        @Override
+        protected Type visitCurrentPath(CurrentPath node, StackableAstVisitorContext<Context> context)
+        {
+            return setExpressionType(node, VARCHAR);
+        }
+
+        @Override
         protected Type visitParameter(Parameter node, StackableAstVisitorContext<Context> context)
         {
             if (isDescribe) {
@@ -925,8 +975,11 @@ public class ExpressionAnalyzer
         @Override
         public Type visitCast(Cast node, StackableAstVisitorContext<Context> context)
         {
-            Type type = typeManager.getType(parseTypeSignature(node.getType()));
-            if (type == null) {
+            Type type;
+            try {
+                type = typeManager.getType(parseTypeSignature(node.getType()));
+            }
+            catch (IllegalArgumentException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, "Unknown type: " + node.getType());
             }
 
@@ -1062,8 +1115,8 @@ public class ExpressionAnalyzer
         @Override
         public Type visitFieldReference(FieldReference node, StackableAstVisitorContext<Context> context)
         {
-            Type type = baseScope.getRelationType().getFieldByIndex(node.getFieldIndex()).getType();
-            return handleResolvedField(node, new FieldId(baseScope.getRelationId(), node.getFieldIndex()), type, context);
+            Field field = baseScope.getRelationType().getFieldByIndex(node.getFieldIndex());
+            return handleResolvedField(node, new FieldId(baseScope.getRelationId(), node.getFieldIndex()), field, context);
         }
 
         @Override
@@ -1519,6 +1572,7 @@ public class ExpressionAnalyzer
         analysis.addFunctionSignatures(resolvedFunctions);
         analysis.addColumnReferences(analyzer.getColumnReferences());
         analysis.addLambdaArgumentReferences(analyzer.getLambdaArgumentReferences());
+        analysis.addTableColumnReferences(accessControl, session.getIdentity(), analyzer.getTableColumnReferences());
 
         return new ExpressionAnalysis(
                 expressionTypes,

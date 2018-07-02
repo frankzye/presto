@@ -20,6 +20,7 @@ import com.facebook.presto.spi.security.BasicPrincipal;
 import com.facebook.presto.spi.security.Identity;
 import com.facebook.presto.spi.session.ResourceEstimates;
 import com.facebook.presto.spi.type.TimeZoneKey;
+import com.facebook.presto.sql.SqlPath;
 import com.facebook.presto.transaction.TransactionId;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
@@ -43,6 +44,8 @@ public final class SessionRepresentation
     private final Optional<String> source;
     private final Optional<String> catalog;
     private final Optional<String> schema;
+    private final SqlPath path;
+    private final Optional<String> traceToken;
     private final TimeZoneKey timeZoneKey;
     private final Locale locale;
     private final Optional<String> remoteUserAddress;
@@ -50,7 +53,7 @@ public final class SessionRepresentation
     private final Optional<String> clientInfo;
     private final Set<String> clientTags;
     private final long startTime;
-    private final ResourceEstimates resourceEstimate;
+    private final ResourceEstimates resourceEstimates;
     private final Map<String, String> systemProperties;
     private final Map<ConnectorId, Map<String, String>> catalogProperties;
     private final Map<String, String> preparedStatements;
@@ -65,13 +68,15 @@ public final class SessionRepresentation
             @JsonProperty("source") Optional<String> source,
             @JsonProperty("catalog") Optional<String> catalog,
             @JsonProperty("schema") Optional<String> schema,
+            @JsonProperty("path") SqlPath path,
+            @JsonProperty("traceToken") Optional<String> traceToken,
             @JsonProperty("timeZoneKey") TimeZoneKey timeZoneKey,
             @JsonProperty("locale") Locale locale,
             @JsonProperty("remoteUserAddress") Optional<String> remoteUserAddress,
             @JsonProperty("userAgent") Optional<String> userAgent,
             @JsonProperty("clientInfo") Optional<String> clientInfo,
             @JsonProperty("clientTags") Set<String> clientTags,
-            @JsonProperty("resourceEstimate") ResourceEstimates resourceEstimate,
+            @JsonProperty("resourceEstimates") ResourceEstimates resourceEstimates,
             @JsonProperty("startTime") long startTime,
             @JsonProperty("systemProperties") Map<String, String> systemProperties,
             @JsonProperty("catalogProperties") Map<ConnectorId, Map<String, String>> catalogProperties,
@@ -85,13 +90,15 @@ public final class SessionRepresentation
         this.source = requireNonNull(source, "source is null");
         this.catalog = requireNonNull(catalog, "catalog is null");
         this.schema = requireNonNull(schema, "schema is null");
+        this.path = requireNonNull(path, "path is null");
+        this.traceToken = requireNonNull(traceToken, "traceToken is null");
         this.timeZoneKey = requireNonNull(timeZoneKey, "timeZoneKey is null");
         this.locale = requireNonNull(locale, "locale is null");
         this.remoteUserAddress = requireNonNull(remoteUserAddress, "remoteUserAddress is null");
         this.userAgent = requireNonNull(userAgent, "userAgent is null");
         this.clientInfo = requireNonNull(clientInfo, "clientInfo is null");
         this.clientTags = requireNonNull(clientTags, "clientTags is null");
-        this.resourceEstimate = requireNonNull(resourceEstimate, "resourceEstimate is null");
+        this.resourceEstimates = requireNonNull(resourceEstimates, "resourceEstimates is null");
         this.startTime = startTime;
         this.systemProperties = ImmutableMap.copyOf(systemProperties);
         this.preparedStatements = ImmutableMap.copyOf(preparedStatements);
@@ -140,6 +147,12 @@ public final class SessionRepresentation
     }
 
     @JsonProperty
+    public Optional<String> getTraceToken()
+    {
+        return traceToken;
+    }
+
+    @JsonProperty
     public Optional<String> getCatalog()
     {
         return catalog;
@@ -149,6 +162,12 @@ public final class SessionRepresentation
     public Optional<String> getSchema()
     {
         return schema;
+    }
+
+    @JsonProperty
+    public SqlPath getPath()
+    {
+        return path;
     }
 
     @JsonProperty
@@ -194,9 +213,9 @@ public final class SessionRepresentation
     }
 
     @JsonProperty
-    public ResourceEstimates getResourceEstimate()
+    public ResourceEstimates getResourceEstimates()
     {
-        return resourceEstimate;
+        return resourceEstimates;
     }
 
     @JsonProperty
@@ -227,13 +246,15 @@ public final class SessionRepresentation
                 source,
                 catalog,
                 schema,
+                path,
+                traceToken,
                 timeZoneKey,
                 locale,
                 remoteUserAddress,
                 userAgent,
                 clientInfo,
                 clientTags,
-                resourceEstimate,
+                resourceEstimates,
                 startTime,
                 systemProperties,
                 catalogProperties,

@@ -21,7 +21,6 @@ import com.facebook.presto.spi.block.RowBlockBuilder;
 import com.facebook.presto.spi.type.RowType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.MaterializedResult;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -39,6 +38,7 @@ import static com.facebook.presto.operator.PageAssertions.assertPageEquals;
 import static com.facebook.presto.testing.assertions.Assert.assertEquals;
 import static com.facebook.presto.util.StructuralTestUtil.appendToBlockBuilder;
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
@@ -133,7 +133,8 @@ public final class OperatorAssertion
             return toPages(operator, input.iterator());
         }
         catch (Exception e) {
-            throw Throwables.propagate(e);
+            throwIfUnchecked(e);
+            throw new RuntimeException(e);
         }
     }
 
@@ -166,12 +167,12 @@ public final class OperatorAssertion
         return rowType.getObject(blockBuilder, 0);
     }
 
-    public static void assertOperatorEquals(OperatorFactory operatorFactory, DriverContext driverContext, List<Page> input, List<Page> expected)
+    public static void assertOperatorEquals(OperatorFactory operatorFactory, List<Type> types, DriverContext driverContext, List<Page> input, List<Page> expected)
     {
         List<Page> actual = toPages(operatorFactory, driverContext, input);
         assertEquals(actual.size(), expected.size());
         for (int i = 0; i < actual.size(); i++) {
-            assertPageEquals(operatorFactory.getTypes(), actual.get(i), expected.get(i));
+            assertPageEquals(types, actual.get(i), expected.get(i));
         }
     }
 
@@ -183,16 +184,11 @@ public final class OperatorAssertion
     public static void assertOperatorEquals(OperatorFactory operatorFactory, DriverContext driverContext, List<Page> input, MaterializedResult expected, boolean hashEnabled, List<Integer> hashChannels)
     {
         List<Page> pages = toPages(operatorFactory, driverContext, input);
-        MaterializedResult actual;
         if (hashEnabled && !hashChannels.isEmpty()) {
             // Drop the hashChannel for all pages
-            List<Page> actualPages = dropChannel(pages, hashChannels);
-            List<Type> expectedTypes = without(operatorFactory.getTypes(), hashChannels);
-            actual = toMaterializedResult(driverContext.getSession(), expectedTypes, actualPages);
+            pages = dropChannel(pages, hashChannels);
         }
-        else {
-            actual = toMaterializedResult(driverContext.getSession(), operatorFactory.getTypes(), pages);
-        }
+        MaterializedResult actual = toMaterializedResult(driverContext.getSession(), expected.getTypes(), pages);
         assertEquals(actual, expected);
     }
 
@@ -214,17 +210,11 @@ public final class OperatorAssertion
             Optional<Integer> hashChannel)
     {
         List<Page> pages = toPages(operatorFactory, driverContext, input);
-        MaterializedResult actual;
         if (hashEnabled && hashChannel.isPresent()) {
             // Drop the hashChannel for all pages
-            List<Page> actualPages = dropChannel(pages, ImmutableList.of(hashChannel.get()));
-            List<Type> expectedTypes = without(operatorFactory.getTypes(), ImmutableList.of(hashChannel.get()));
-            actual = toMaterializedResult(driverContext.getSession(), expectedTypes, actualPages);
+            pages = dropChannel(pages, ImmutableList.of(hashChannel.get()));
         }
-        else {
-            actual = toMaterializedResult(driverContext.getSession(), operatorFactory.getTypes(), pages);
-        }
-
+        MaterializedResult actual = toMaterializedResult(driverContext.getSession(), expected.getTypes(), pages);
         assertEqualsIgnoreOrder(actual.getMaterializedRows(), expected.getMaterializedRows());
     }
 

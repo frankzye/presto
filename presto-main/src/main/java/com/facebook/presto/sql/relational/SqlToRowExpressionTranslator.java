@@ -14,6 +14,7 @@
 package com.facebook.presto.sql.relational;
 
 import com.facebook.presto.Session;
+import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.metadata.FunctionKind;
 import com.facebook.presto.metadata.FunctionRegistry;
 import com.facebook.presto.metadata.Signature;
@@ -78,7 +79,9 @@ import com.google.common.collect.Lists;
 
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 
+import static com.facebook.presto.SystemSessionProperties.isLegacyRowFieldOrdinalAccessEnabled;
 import static com.facebook.presto.metadata.FunctionKind.SCALAR;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
@@ -86,7 +89,6 @@ import static com.facebook.presto.spi.type.CharType.createCharType;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
-import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
@@ -118,9 +120,9 @@ import static com.facebook.presto.type.LikePatternType.LIKE_PATTERN;
 import static com.facebook.presto.util.DateTimeUtils.parseDayTimeInterval;
 import static com.facebook.presto.util.DateTimeUtils.parseTimeWithTimeZone;
 import static com.facebook.presto.util.DateTimeUtils.parseTimeWithoutTimeZone;
-import static com.facebook.presto.util.DateTimeUtils.parseTimestampWithTimeZone;
-import static com.facebook.presto.util.DateTimeUtils.parseTimestampWithoutTimeZone;
+import static com.facebook.presto.util.DateTimeUtils.parseTimestampLiteral;
 import static com.facebook.presto.util.DateTimeUtils.parseYearMonthInterval;
+import static com.facebook.presto.util.LegacyRowFieldOrdinalAccessUtil.parseAnonymousRowFieldOrdinalAccess;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -141,7 +143,14 @@ public final class SqlToRowExpressionTranslator
             Session session,
             boolean optimize)
     {
-        RowExpression result = new Visitor(functionKind, types, typeManager, session.getTimeZoneKey()).process(expression, null);
+        Visitor visitor = new Visitor(
+                functionKind,
+                types,
+                typeManager,
+                session.getTimeZoneKey(),
+                isLegacyRowFieldOrdinalAccessEnabled(session),
+                SystemSessionProperties.isLegacyTimestamp(session));
+        RowExpression result = visitor.process(expression, null);
 
         requireNonNull(result, "translated expression is null");
 
@@ -160,13 +169,24 @@ public final class SqlToRowExpressionTranslator
         private final Map<NodeRef<Expression>, Type> types;
         private final TypeManager typeManager;
         private final TimeZoneKey timeZoneKey;
+        private final boolean legacyRowFieldOrdinalAccess;
+        @Deprecated
+        private final boolean isLegacyTimestamp;
 
-        private Visitor(FunctionKind functionKind, Map<NodeRef<Expression>, Type> types, TypeManager typeManager, TimeZoneKey timeZoneKey)
+        private Visitor(
+                FunctionKind functionKind,
+                Map<NodeRef<Expression>, Type> types,
+                TypeManager typeManager,
+                TimeZoneKey timeZoneKey,
+                boolean legacyRowFieldOrdinalAccess,
+                boolean isLegacyTimestamp)
         {
             this.functionKind = functionKind;
             this.types = ImmutableMap.copyOf(requireNonNull(types, "types is null"));
             this.typeManager = typeManager;
             this.timeZoneKey = timeZoneKey;
+            this.legacyRowFieldOrdinalAccess = legacyRowFieldOrdinalAccess;
+            this.isLegacyTimestamp = isLegacyTimestamp;
         }
 
         private Type getType(Expression node)
@@ -241,8 +261,11 @@ public final class SqlToRowExpressionTranslator
         @Override
         protected RowExpression visitGenericLiteral(GenericLiteral node, Void context)
         {
-            Type type = typeManager.getType(parseTypeSignature(node.getType()));
-            if (type == null) {
+            Type type;
+            try {
+                type = typeManager.getType(parseTypeSignature(node.getType()));
+            }
+            catch (IllegalArgumentException e) {
                 throw new IllegalArgumentException("Unsupported type: " + node.getType());
             }
 
@@ -267,8 +290,13 @@ public final class SqlToRowExpressionTranslator
                 value = parseTimeWithTimeZone(node.getValue());
             }
             else {
-                // parse in time zone of client
-                value = parseTimeWithoutTimeZone(timeZoneKey, node.getValue());
+                if (isLegacyTimestamp) {
+                    // parse in time zone of client
+                    value = parseTimeWithoutTimeZone(timeZoneKey, node.getValue());
+                }
+                else {
+                    value = parseTimeWithoutTimeZone(node.getValue());
+                }
             }
             return constant(value, getType(node));
         }
@@ -277,12 +305,11 @@ public final class SqlToRowExpressionTranslator
         protected RowExpression visitTimestampLiteral(TimestampLiteral node, Void context)
         {
             long value;
-            if (getType(node).equals(TIMESTAMP_WITH_TIME_ZONE)) {
-                value = parseTimestampWithTimeZone(timeZoneKey, node.getValue());
+            if (isLegacyTimestamp) {
+                value = parseTimestampLiteral(timeZoneKey, node.getValue());
             }
             else {
-                // parse in time zone of client
-                value = parseTimestampWithoutTimeZone(timeZoneKey, node.getValue());
+                value = parseTimestampLiteral(node.getValue());
             }
             return constant(value, getType(node));
         }
@@ -552,15 +579,24 @@ public final class SqlToRowExpressionTranslator
         protected RowExpression visitDereferenceExpression(DereferenceExpression node, Void context)
         {
             RowType rowType = (RowType) getType(node.getBase());
+            String fieldName = node.getField().getValue();
             List<Field> fields = rowType.getFields();
             int index = -1;
             for (int i = 0; i < fields.size(); i++) {
                 Field field = fields.get(i);
-                if (field.getName().isPresent() && field.getName().get().equalsIgnoreCase(node.getField().getValue())) {
+                if (field.getName().isPresent() && field.getName().get().equalsIgnoreCase(fieldName)) {
                     checkArgument(index < 0, "Ambiguous field %s in type %s", field, rowType.getDisplayName());
                     index = i;
                 }
             }
+
+            if (legacyRowFieldOrdinalAccess && index < 0) {
+                OptionalInt rowIndex = parseAnonymousRowFieldOrdinalAccess(fieldName, fields);
+                if (rowIndex.isPresent()) {
+                    index = rowIndex.getAsInt();
+                }
+            }
+
             checkState(index >= 0, "could not find field name: %s", node.getField());
             Type returnType = getType(node);
             return call(dereferenceSignature(returnType, rowType), returnType, process(node.getBase(), context), constant(index, INTEGER));

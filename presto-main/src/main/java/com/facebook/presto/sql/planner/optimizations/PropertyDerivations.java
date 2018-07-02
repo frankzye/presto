@@ -85,6 +85,7 @@ import java.util.stream.Collectors;
 import static com.facebook.presto.SystemSessionProperties.planWithTableNodePartitioning;
 import static com.facebook.presto.spi.predicate.TupleDomain.extractFixedValues;
 import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
+import static com.facebook.presto.sql.planner.SystemPartitioningHandle.ARBITRARY_DISTRIBUTION;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.arbitraryPartition;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.coordinatorSingleStreamPartition;
 import static com.facebook.presto.sql.planner.optimizations.ActualProperties.Global.partitionedOn;
@@ -181,7 +182,25 @@ public class PropertyDerivations
         @Override
         public ActualProperties visitAssignUniqueId(AssignUniqueId node, List<ActualProperties> inputProperties)
         {
-            return Iterables.getOnlyElement(inputProperties);
+            ActualProperties properties = Iterables.getOnlyElement(inputProperties);
+
+            ImmutableList.Builder<LocalProperty<Symbol>> newLocalProperties = ImmutableList.builder();
+            newLocalProperties.addAll(properties.getLocalProperties());
+            newLocalProperties.add(new GroupingProperty<>(ImmutableList.of(node.getIdColumn())));
+            node.getSource().getOutputSymbols().stream()
+                    .forEach(column -> newLocalProperties.add(new ConstantProperty<>(column)));
+
+            if (properties.getNodePartitioning().isPresent()) {
+                // preserve input (possibly preferred) partitioning
+                return ActualProperties.builderFrom(properties)
+                        .local(newLocalProperties.build())
+                        .build();
+            }
+
+            return ActualProperties.builderFrom(properties)
+                    .global(partitionedOn(ARBITRARY_DISTRIBUTION, ImmutableList.of(node.getIdColumn()), Optional.empty()))
+                    .local(newLocalProperties.build())
+                    .build();
         }
 
         @Override
@@ -373,6 +392,16 @@ public class PropertyDerivations
                     Map<Symbol, NullableValue> constants = new HashMap<>();
                     constants.putAll(probeProperties.getConstants());
                     constants.putAll(buildProperties.getConstants());
+
+                    if (node.isCrossJoin()) {
+                        // Cross join preserves only constants from probe and build sides.
+                        // Cross join doesn't preserve sorting or grouping local properties on either side.
+                        return ActualProperties.builder()
+                                .global(probeProperties)
+                                .local(ImmutableList.of())
+                                .constants(constants)
+                                .build();
+                    }
 
                     return ActualProperties.builderFrom(probeProperties)
                             .constants(constants)

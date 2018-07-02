@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static com.facebook.presto.SystemSessionProperties.preferPartialAggregation;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.FINAL;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.PARTIAL;
 import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
@@ -66,6 +67,7 @@ public class PushPartialAggregationThroughExchange
     private static final Capture<ExchangeNode> EXCHANGE_NODE = Capture.newCapture();
 
     private static final Pattern<AggregationNode> PATTERN = aggregation()
+            .matching(node -> !node.isStreamable())
             .with(source().matching(exchange().capturedAs(EXCHANGE_NODE)));
 
     @Override
@@ -94,7 +96,7 @@ public class PushPartialAggregationThroughExchange
             return Result.ofPlanNode(split(aggregationNode, context));
         }
 
-        if (!decomposable) {
+        if (!decomposable || !preferPartialAggregation(context.getSession())) {
             return Result.empty();
         }
 
@@ -214,6 +216,7 @@ public class PushPartialAggregationThroughExchange
                 node.getSource(),
                 intermediateAggregation,
                 node.getGroupingSets(),
+                ImmutableList.of(),
                 PARTIAL,
                 node.getHashSymbol(),
                 node.getGroupIdSymbol());
@@ -223,6 +226,7 @@ public class PushPartialAggregationThroughExchange
                 partial,
                 finalAggregation,
                 node.getGroupingSets(),
+                ImmutableList.of(),
                 FINAL,
                 node.getHashSymbol(),
                 node.getGroupIdSymbol());

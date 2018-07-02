@@ -683,7 +683,13 @@ public final class ExpressionTreeRewriter<C>
                 }
             }
 
-            // No default rewrite for ExistsPredicate since we do not want to traverse subqueries
+            Expression subquery = node.getSubquery();
+            subquery = rewrite(subquery, context.get());
+
+            if (subquery != node.getSubquery()) {
+                return new ExistsPredicate(subquery);
+            }
+
             return node;
         }
 
@@ -860,6 +866,32 @@ public final class ExpressionTreeRewriter<C>
         {
             if (!context.isDefaultRewrite()) {
                 Expression result = rewriter.rewriteGroupingOperation(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            return node;
+        }
+
+        @Override
+        protected Expression visitCurrentUser(CurrentUser node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteCurrentUser(node, context.get(), ExpressionTreeRewriter.this);
+                if (result != null) {
+                    return result;
+                }
+            }
+
+            return node;
+        }
+
+        @Override
+        protected Expression visitCurrentPath(CurrentPath node, Context<C> context)
+        {
+            if (!context.isDefaultRewrite()) {
+                Expression result = rewriter.rewriteCurrentPath(node, context.get(), ExpressionTreeRewriter.this);
                 if (result != null) {
                     return result;
                 }

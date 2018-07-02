@@ -29,8 +29,7 @@ public class TestArrayBlockBuilder
     @Test
     public void testArrayBlockIsFull()
     {
-        testIsFull(new PageBuilderStatus(THREE_INTS_ENTRY_SIZE * EXPECTED_ENTRY_COUNT, 10240));
-        testIsFull(new PageBuilderStatus(10240, THREE_INTS_ENTRY_SIZE * EXPECTED_ENTRY_COUNT));
+        testIsFull(new PageBuilderStatus(THREE_INTS_ENTRY_SIZE * EXPECTED_ENTRY_COUNT));
     }
 
     private void testIsFull(PageBuilderStatus pageBuilderStatus)
@@ -69,6 +68,6 @@ public class TestArrayBlockBuilder
         BlockBuilder blockBuilder = new ArrayBlockBuilder(BIGINT, null, EXPECTED_ENTRY_COUNT);
         BlockBuilder elementBlockWriter = blockBuilder.beginBlockEntry();
         elementBlockWriter.writeLong(45).closeEntry();
-        blockBuilder.writeObject(new FixedWidthBlockBuilder(8, 4).writeLong(123).closeEntry().build()).closeEntry();
+        blockBuilder.appendStructure(new FixedWidthBlockBuilder(8, 4).writeLong(123).closeEntry().build());
     }
 }

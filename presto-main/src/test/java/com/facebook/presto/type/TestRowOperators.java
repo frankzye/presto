@@ -13,7 +13,9 @@
  */
 package com.facebook.presto.type;
 
+import com.facebook.presto.Session;
 import com.facebook.presto.operator.scalar.AbstractTestFunctions;
+import com.facebook.presto.operator.scalar.FunctionAssertions;
 import com.facebook.presto.spi.StandardErrorCode;
 import com.facebook.presto.spi.block.BlockBuilder;
 import com.facebook.presto.spi.function.LiteralParameters;
@@ -21,15 +23,16 @@ import com.facebook.presto.spi.function.ScalarFunction;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.type.ArrayType;
 import com.facebook.presto.spi.type.RowType;
-import com.facebook.presto.spi.type.SqlTimestamp;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.spi.type.Type;
+import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.analyzer.SemanticErrorCode;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import io.airlift.slice.Slice;
+import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
@@ -39,7 +42,9 @@ import java.util.List;
 import java.util.Set;
 
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
+import static com.facebook.presto.SystemSessionProperties.LEGACY_ROW_FIELD_ORDINAL_ACCESS;
 import static com.facebook.presto.spi.function.OperatorType.HASH_CODE;
+import static com.facebook.presto.spi.function.OperatorType.INDETERMINATE;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DecimalType.createDecimalType;
@@ -47,10 +52,14 @@ import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
 import static com.facebook.presto.spi.type.IntegerType.INTEGER;
 import static com.facebook.presto.spi.type.RealType.REAL;
 import static com.facebook.presto.spi.type.SmallintType.SMALLINT;
+import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
 import static com.facebook.presto.spi.type.TinyintType.TINYINT;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
+import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
+import static com.facebook.presto.sql.analyzer.SemanticErrorCode.MISSING_ATTRIBUTE;
+import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static com.facebook.presto.type.JsonType.JSON;
 import static com.facebook.presto.util.StructuralTestUtil.appendToBlockBuilder;
 import static com.facebook.presto.util.StructuralTestUtil.mapType;
@@ -58,6 +67,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.String.format;
 import static java.util.Arrays.asList;
 import static java.util.Collections.emptyList;
+import static org.joda.time.DateTimeZone.UTC;
 import static org.testng.Assert.assertEquals;
 
 public class TestRowOperators
@@ -65,10 +75,24 @@ public class TestRowOperators
 {
     public TestRowOperators() {}
 
+    private static FunctionAssertions legacyRowFieldOrdinalAccess;
+
     @BeforeClass
     public void setUp()
     {
         registerScalar(getClass());
+        legacyRowFieldOrdinalAccess = new FunctionAssertions(
+                Session.builder(session)
+                        .setSystemProperty(LEGACY_ROW_FIELD_ORDINAL_ACCESS, "true")
+                        .build(),
+                new FeaturesConfig());
+    }
+
+    @AfterClass(alwaysRun = true)
+    public final void tearDown()
+    {
+        legacyRowFieldOrdinalAccess.close();
+        legacyRowFieldOrdinalAccess = null;
     }
 
     @ScalarFunction
@@ -116,9 +140,9 @@ public class TestRowOperators
                 "[\"2001-08-22\",\"2001-08-23\",null]");
 
         assertFunction(
-                "CAST(ROW(from_unixtime(1), cast(null as TIMESTAMP)) AS JSON)",
+                "CAST(ROW(TIMESTAMP '1970-01-01 00:00:01', cast(null as TIMESTAMP)) AS JSON)",
                 JSON,
-                format("[\"%s\",null]", sqlTimestamp(1000).toString()));
+                format("[\"%s\",null]", sqlTimestampOf(1970, 1, 1, 0, 0, 1, 0, UTC, UTC_KEY, TEST_SESSION)));
 
         assertFunction(
                 "cast(ROW(ARRAY[1, 2], ARRAY[3, null], ARRAY[], ARRAY[null, null], CAST(null AS ARRAY<BIGINT>)) AS JSON)",
@@ -386,6 +410,21 @@ public class TestRowOperators
 
         assertDecimalFunction("CAST(row(1.0, 123123123456.6549876543) AS ROW(col0 decimal(2,1), col1 decimal(22,10))).col0", decimal("1.0"));
         assertDecimalFunction("CAST(row(1.0, 123123123456.6549876543) AS ROW(col0 decimal(2,1), col1 decimal(22,10))).col1", decimal("123123123456.6549876543"));
+
+        // Legacy anonymous row field ordinal access
+        legacyRowFieldOrdinalAccess.assertFunction("row(1, CAST(NULL AS DOUBLE)).field1", DOUBLE, null);
+        legacyRowFieldOrdinalAccess.assertFunction("row(TRUE, CAST(NULL AS BOOLEAN)).field1", BOOLEAN, null);
+        legacyRowFieldOrdinalAccess.assertFunction("row(TRUE, CAST(NULL AS ARRAY<INTEGER>)).field1", new ArrayType(INTEGER), null);
+        legacyRowFieldOrdinalAccess.assertFunction("row(1.0E0, CAST(NULL AS VARCHAR)).field1", createUnboundedVarcharType(), null);
+        legacyRowFieldOrdinalAccess.assertFunction("row(1, 2).field0", INTEGER, 1);
+        legacyRowFieldOrdinalAccess.assertFunction("row(1, 'kittens').field1", createVarcharType(7), "kittens");
+        legacyRowFieldOrdinalAccess.assertFunction("row(1, 2).\"field1\"", INTEGER, 2);
+        legacyRowFieldOrdinalAccess.assertFunction("array[row(1, 2)][1].field1", INTEGER, 2);
+        legacyRowFieldOrdinalAccess.assertFunction("row(FALSE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0E0, 4.0E0])).field1", new ArrayType(INTEGER), ImmutableList.of(1, 2));
+        legacyRowFieldOrdinalAccess.assertFunction("row(FALSE, ARRAY [1, 2], MAP(ARRAY[1, 3], ARRAY[2.0E0, 4.0E0])).field2", mapType(INTEGER, DOUBLE), ImmutableMap.of(1, 2.0, 3, 4.0));
+        legacyRowFieldOrdinalAccess.assertFunction("row(1.0E0, ARRAY[row(31, 4.1E0), row(32, 4.2E0)], row(3, 4.0E0)).field1[2].field0", INTEGER, 32);
+        legacyRowFieldOrdinalAccess.assertFunction("row(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11).field10", INTEGER, 11);
+        legacyRowFieldOrdinalAccess.assertInvalidFunction("CAST(row(1, 2) as ROW(col0 integer, col1 integer)).field1", MISSING_ATTRIBUTE);
     }
 
     @Test
@@ -414,6 +453,16 @@ public class TestRowOperators
             fields[i] = new String(chars);
         }
         assertFunction(format(longFieldNameCast, fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[1], fields[2]), VARCHAR, "233");
+
+        assertFunction(
+                "cast(row(json '2', json '1.5', json 'true', json '\"abc\"', json '[1, 2]') as row(a BIGINT, b DOUBLE, c BOOLEAN, d VARCHAR, e ARRAY(BIGINT)))",
+                RowType.from(ImmutableList.of(
+                        RowType.field("a", BIGINT),
+                        RowType.field("b", DOUBLE),
+                        RowType.field("c", BOOLEAN),
+                        RowType.field("d", VARCHAR),
+                        RowType.field("e", new ArrayType(BIGINT)))),
+                asList(2L, 1.5, true, "abc", ImmutableList.of(1L, 2L)));
     }
 
     @Test
@@ -430,6 +479,7 @@ public class TestRowOperators
         assertFunction("row(1, 2.0E0, TRUE, 'cat', CAST(NULL AS INTEGER)) IS DISTINCT FROM row(1, 2.0E0, TRUE, 'cat', CAST(NULL AS INTEGER))", BOOLEAN, false);
         assertFunction("row(1, 2.0E0, TRUE, 'cat') IS DISTINCT FROM row(1, 2.0E0, TRUE, CAST(NULL AS VARCHAR(3)))", BOOLEAN, true);
         assertFunction("row(1, 2.0E0, TRUE, CAST(NULL AS VARCHAR(3))) IS DISTINCT FROM row(1, 2.0E0, TRUE, CAST(NULL AS VARCHAR(3)))", BOOLEAN, false);
+        assertFunction("ARRAY[ROW(1)] IS DISTINCT FROM ARRAY[ROW(1)]", BOOLEAN, false);
     }
 
     @Test
@@ -483,6 +533,39 @@ public class TestRowOperators
         assertRowHashOperator("ROW(true, 2)", ImmutableList.of(BOOLEAN, INTEGER), ImmutableList.of(true, 2));
     }
 
+    @Test
+    public void testIndeterminate()
+    {
+        assertOperator(INDETERMINATE, "cast(null as row(col0 bigint))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(1)", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(null)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(1,2)", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(1,null)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(null,2)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(null,null)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row('111',null)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(null,'222')", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row('111','222')", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(row(1), row(2), row(3))", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(row(1), row(null), row(3))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(1), row(cast(null as bigint)), row(3))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(row(1)), row(2), row(3))", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(row(row(null)), row(2), row(3))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(row(cast(null as boolean))), row(2), row(3))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(1,2),row(array[3,4,5]))", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(row(1,2),row(array[row(3,4)]))", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(row(null,2),row(array[row(3,4)]))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(1,null),row(array[row(3,4)]))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(1,2),row(array[cast(row(3,4) as row(a integer, b integer)), cast(null as row(a integer, b integer))]))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(1,2),row(array[row(null,4)]))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(row(1,2),row(array[row(map(array[8], array[9]),4)]))", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(row(1,2),row(array[row(map(array[8], array[null]),4)]))", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(1E0,2E0)", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(1E0,null)", BOOLEAN, true);
+        assertOperator(INDETERMINATE, "row(true,false)", BOOLEAN, false);
+        assertOperator(INDETERMINATE, "row(true,null)", BOOLEAN, true);
+    }
+
     private void assertRowHashOperator(String inputString, List<Type> types, List<Object> elements)
     {
         checkArgument(types.size() == elements.size(), "types and elements must have the same size");
@@ -507,10 +590,5 @@ public class TestRowOperators
             assertFunction(base + operator + greater, BOOLEAN, lessOrInequalityOperators.contains(operator));
             assertFunction(greater + operator + base, BOOLEAN, greaterOrInequalityOperators.contains(operator));
         }
-    }
-
-    private static SqlTimestamp sqlTimestamp(long millisUtc)
-    {
-        return new SqlTimestamp(millisUtc, TEST_SESSION.getTimeZoneKey());
     }
 }

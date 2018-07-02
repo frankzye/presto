@@ -99,7 +99,6 @@ import com.google.common.base.CaseFormat;
 import com.google.common.base.Functions;
 import com.google.common.base.Joiner;
 import com.google.common.base.Strings;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -615,7 +614,8 @@ public class PlanPrinter
             node.getFilter().ifPresent(expression -> joinExpressions.add(expression));
 
             if (node.isSpatialJoin()) {
-                print(indent, "- SpatialJoin[%s] => [%s]",
+                print(indent, "- Spatial%s[%s] => [%s]",
+                        node.getType().getJoinLabel(),
                         Joiner.on(" AND ").join(joinExpressions),
                         formatOutputs(node.getOutputSymbols()));
             }
@@ -722,6 +722,9 @@ public class PlanPrinter
             String type = "";
             if (node.getStep() != AggregationNode.Step.SINGLE) {
                 type = format("(%s)", node.getStep().toString());
+            }
+            if (node.isStreamable()) {
+                type = format("%s(STREAMING)", type);
             }
             String key = "";
             if (!node.getGroupingKeys().isEmpty()) {
@@ -1438,9 +1441,6 @@ public class PlanPrinter
         }
         catch (OperatorNotFoundException e) {
             return "<UNREPRESENTABLE VALUE>";
-        }
-        catch (Throwable throwable) {
-            throw Throwables.propagate(throwable);
         }
     }
 }

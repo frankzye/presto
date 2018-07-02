@@ -136,6 +136,7 @@ public class TestQueryStats
             new DateTime(4),
             new Duration(6, NANOSECONDS),
             new Duration(5, NANOSECONDS),
+            new Duration(31, NANOSECONDS),
             new Duration(7, NANOSECONDS),
             new Duration(8, NANOSECONDS),
 
@@ -157,6 +158,7 @@ public class TestQueryStats
             new DataSize(19, BYTE),
             new DataSize(20, BYTE),
             new DataSize(21, BYTE),
+            new DataSize(22, BYTE),
 
             true,
             new Duration(20, NANOSECONDS),
@@ -227,8 +229,9 @@ public class TestQueryStats
 
         assertEquals(actual.getCumulativeUserMemory(), 17.0);
         assertEquals(actual.getUserMemoryReservation(), new DataSize(18, BYTE));
-        assertEquals(actual.getPeakUserMemoryReservation(), new DataSize(19, BYTE));
-        assertEquals(actual.getPeakTotalMemoryReservation(), new DataSize(20, BYTE));
+        assertEquals(actual.getTotalMemoryReservation(), new DataSize(19, BYTE));
+        assertEquals(actual.getPeakUserMemoryReservation(), new DataSize(20, BYTE));
+        assertEquals(actual.getPeakTotalMemoryReservation(), new DataSize(21, BYTE));
 
         assertEquals(actual.getTotalScheduledTime(), new Duration(20, NANOSECONDS));
         assertEquals(actual.getTotalCpuTime(), new Duration(21, NANOSECONDS));

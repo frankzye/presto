@@ -14,10 +14,15 @@
 package com.facebook.presto.tests;
 
 import com.facebook.presto.testing.MaterializedResult;
+import com.facebook.presto.testing.MaterializedRow;
 import org.testng.annotations.Test;
+
+import java.util.List;
 
 import static com.facebook.presto.testing.MaterializedResult.resultBuilder;
 import static com.facebook.presto.tests.QueryAssertions.assertEqualsIgnoreOrder;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
 
 public abstract class AbstractTestAggregations
         extends AbstractTestQueryFramework
@@ -294,11 +299,9 @@ public abstract class AbstractTestAggregations
 
         assertQuery("SELECT count(1) FILTER (WHERE orderstatus = 'O') FROM orders", "SELECT count(*) FROM orders WHERE orderstatus = 'O'");
 
-        // TODO: enable when DISTINCT is allowed with filtered aggregations
-        // assertQuery("SELECT count(DISTINCT x) FILTER (where y = 1) FROM (VALUES (2, 1), (1, 2), (1,1)) t(x, y)", "SELECT 2");
-        // assertQuery("SELECT sum(DISTINCT x) FILTER (WHERE x > 1) AS x FROM (VALUES (1), (2), (2), (4)) t (x)", "SELECT 6");
-        // assertQuery("SELECT sum(DISTINCT x) FILTER (WHERE y > 3), sum(DISTINCT y) FILTER (WHERE x > 1) FROM (VALUES (1, 3), (2, 4), (2, 4), (4, 5)) t (x, y)", "SELECT 6, 9");
-        // assertQuery("SELECT sum(x) FILTER (WHERE x > 1) AS x, sum(DISTINCT x) FROM (VALUES (1), (2), (2), (4)) t (x)", "SELECT 8, 9");
+        // filter out all rows
+        assertQuery("SELECT sum(x) FILTER (WHERE y > 5) FROM (VALUES (1, 3), (2, 4), (2, 4), (4, 5)) t (x, y)", "SELECT null");
+        assertQuery("SELECT count(*) FILTER (WHERE x > 4), sum(x) FILTER (WHERE y > 5) FROM (VALUES (1, 3), (2, 4), (2, 4), (4, 5)) t (x, y)", "SELECT 0, null");
     }
 
     @Test
@@ -657,14 +660,14 @@ public abstract class AbstractTestAggregations
     @Test
     public void testApproximateCountDistinct()
     {
-        assertQuery("SELECT approx_distinct(custkey) FROM orders", "SELECT 996");
-        assertQuery("SELECT approx_distinct(custkey, 0.023) FROM orders", "SELECT 996");
-        assertQuery("SELECT approx_distinct(CAST(custkey AS DOUBLE)) FROM orders", "SELECT 1031");
-        assertQuery("SELECT approx_distinct(CAST(custkey AS DOUBLE), 0.023) FROM orders", "SELECT 1031");
-        assertQuery("SELECT approx_distinct(CAST(custkey AS VARCHAR)) FROM orders", "SELECT 1011");
-        assertQuery("SELECT approx_distinct(CAST(custkey AS VARCHAR), 0.023) FROM orders", "SELECT 1011");
-        assertQuery("SELECT approx_distinct(to_utf8(CAST(custkey AS VARCHAR))) FROM orders", "SELECT 1011");
-        assertQuery("SELECT approx_distinct(to_utf8(CAST(custkey AS VARCHAR)), 0.023) FROM orders", "SELECT 1011");
+        assertQuery("SELECT approx_distinct(custkey) FROM orders", "SELECT 990");
+        assertQuery("SELECT approx_distinct(custkey, 0.023) FROM orders", "SELECT 990");
+        assertQuery("SELECT approx_distinct(CAST(custkey AS DOUBLE)) FROM orders", "SELECT 1014");
+        assertQuery("SELECT approx_distinct(CAST(custkey AS DOUBLE), 0.023) FROM orders", "SELECT 1014");
+        assertQuery("SELECT approx_distinct(CAST(custkey AS VARCHAR)) FROM orders", "SELECT 1036");
+        assertQuery("SELECT approx_distinct(CAST(custkey AS VARCHAR), 0.023) FROM orders", "SELECT 1036");
+        assertQuery("SELECT approx_distinct(to_utf8(CAST(custkey AS VARCHAR))) FROM orders", "SELECT 1036");
+        assertQuery("SELECT approx_distinct(to_utf8(CAST(custkey AS VARCHAR)), 0.023) FROM orders", "SELECT 1036");
     }
 
     @Test
@@ -672,8 +675,8 @@ public abstract class AbstractTestAggregations
     {
         MaterializedResult actual = computeActual("SELECT orderstatus, approx_distinct(custkey) FROM orders GROUP BY orderstatus");
         MaterializedResult expected = resultBuilder(getSession(), actual.getTypes())
-                .row("O", 995L)
-                .row("F", 993L)
+                .row("O", 990L)
+                .row("F", 990L)
                 .row("P", 303L)
                 .build();
 
@@ -685,12 +688,55 @@ public abstract class AbstractTestAggregations
     {
         MaterializedResult actual = computeActual("SELECT orderstatus, approx_distinct(custkey, 0.023) FROM orders GROUP BY orderstatus");
         MaterializedResult expected = resultBuilder(getSession(), actual.getTypes())
-                .row("O", 995L)
-                .row("F", 993L)
+                .row("O", 990L)
+                .row("F", 990L)
                 .row("P", 303L)
                 .build();
 
         assertEqualsIgnoreOrder(actual.getMaterializedRows(), expected.getMaterializedRows());
+    }
+
+    @Test
+    public void testDistinctNan()
+    {
+        MaterializedResult actual = computeActual("SELECT DISTINCT a/a FROM (VALUES (0.0e0), (0.0e0)) x (a)");
+        assertTrue(Double.isNaN((Double) actual.getOnlyValue()));
+    }
+
+    @Test
+    public void testGroupByNan()
+    {
+        MaterializedResult actual = computeActual("SELECT * FROM (VALUES nan(), nan(), nan()) GROUP BY 1");
+        assertTrue(Double.isNaN((Double) actual.getOnlyValue()));
+    }
+
+    @Test
+    public void testGroupByNanRow()
+    {
+        MaterializedResult actual = computeActual("SELECT a, b, c FROM (VALUES ROW(nan(), 1, 2), ROW(nan(), 1, 2)) t(a, b, c) GROUP BY 1, 2, 3");
+        List<MaterializedRow> actualRows = actual.getMaterializedRows();
+        assertEquals(actualRows.size(), 1);
+        assertTrue(Double.isNaN((Double) actualRows.get(0).getField(0)));
+        assertEquals(actualRows.get(0).getField(1), 1);
+        assertEquals(actualRows.get(0).getField(2), 2);
+    }
+
+    @Test
+    public void testGroupByNanArray()
+    {
+        MaterializedResult actual = computeActual("SELECT a FROM (VALUES (ARRAY[nan(), 2e0, 3e0]), (ARRAY[nan(), 2e0, 3e0])) t(a) GROUP BY a");
+        List<MaterializedRow> actualRows = actual.getMaterializedRows();
+        assertEquals(actualRows.size(), 1);
+        assertTrue(Double.isNaN(((List<Double>) actualRows.get(0).getField(0)).get(0)));
+        assertEquals(((List<Double>) actualRows.get(0).getField(0)).get(1), 2.0);
+        assertEquals(((List<Double>) actualRows.get(0).getField(0)).get(2), 3.0);
+    }
+
+    @Test
+    public void testGroupByNanMap()
+    {
+        MaterializedResult actual = computeActual("SELECT MAP_KEYS(x)[1] FROM (VALUES MAP(ARRAY[nan()], ARRAY[ARRAY[1]]), MAP(ARRAY[nan()], ARRAY[ARRAY[2]])) t(x) GROUP BY 1");
+        assertTrue(Double.isNaN((Double) actual.getOnlyValue()));
     }
 
     @Test

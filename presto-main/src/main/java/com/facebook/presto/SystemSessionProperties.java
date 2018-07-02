@@ -45,11 +45,13 @@ public final class SystemSessionProperties
     public static final String DISTRIBUTED_JOIN = "distributed_join";
     public static final String DISTRIBUTED_INDEX_JOIN = "distributed_index_join";
     public static final String HASH_PARTITION_COUNT = "hash_partition_count";
+    public static final String GROUPED_EXECUTION_FOR_AGGREGATION = "grouped_execution_for_aggregation";
     public static final String PREFER_STREAMING_OPERATORS = "prefer_streaming_operators";
     public static final String TASK_WRITER_COUNT = "task_writer_count";
     public static final String TASK_CONCURRENCY = "task_concurrency";
     public static final String TASK_SHARE_INDEX_LOADING = "task_share_index_loading";
     public static final String QUERY_MAX_MEMORY = "query_max_memory";
+    public static final String QUERY_MAX_TOTAL_MEMORY = "query_max_total_memory";
     public static final String QUERY_MAX_EXECUTION_TIME = "query_max_execution_time";
     public static final String QUERY_MAX_RUN_TIME = "query_max_run_time";
     public static final String RESOURCE_OVERCOMMIT = "resource_overcommit";
@@ -73,9 +75,9 @@ public final class SystemSessionProperties
     public static final String SPILL_ENABLED = "spill_enabled";
     public static final String AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT = "aggregation_operator_unspill_memory_limit";
     public static final String OPTIMIZE_DISTINCT_AGGREGATIONS = "optimize_mixed_distinct_aggregations";
-    public static final String LEGACY_ORDER_BY = "legacy_order_by";
     public static final String LEGACY_ROUND_N_BIGINT = "legacy_round_n_bigint";
     public static final String LEGACY_JOIN_USING = "legacy_join_using";
+    public static final String LEGACY_ROW_FIELD_ORDINAL_ACCESS = "legacy_row_field_ordinal_access";
     public static final String ITERATIVE_OPTIMIZER = "iterative_optimizer_enabled";
     public static final String ITERATIVE_OPTIMIZER_TIMEOUT = "iterative_optimizer_timeout";
     public static final String ENABLE_NEW_STATS_CALCULATOR = "enable_new_stats_calculator";
@@ -89,6 +91,8 @@ public final class SystemSessionProperties
     public static final String FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_SIZE = "filter_and_project_min_output_page_size";
     public static final String FILTER_AND_PROJECT_MIN_OUTPUT_PAGE_ROW_COUNT = "filter_and_project_min_output_page_row_count";
     public static final String USE_MARK_DISTINCT = "use_mark_distinct";
+    public static final String PREFER_PARTITIAL_AGGREGATION = "prefer_partial_aggregation";
+    public static final String MAX_GROUPING_SETS = "max_grouping_sets";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
@@ -129,6 +133,11 @@ public final class SystemSessionProperties
                         HASH_PARTITION_COUNT,
                         "Number of partitions for distributed joins and aggregations",
                         queryManagerConfig.getInitialHashPartitions(),
+                        false),
+                booleanSessionProperty(
+                        GROUPED_EXECUTION_FOR_AGGREGATION,
+                        "Use grouped execution for aggregation when possible",
+                        featuresConfig.isGroupedExecutionForAggregationEnabled(),
                         false),
                 booleanSessionProperty(
                         PREFER_STREAMING_OPERATORS,
@@ -218,6 +227,15 @@ public final class SystemSessionProperties
                         true,
                         value -> DataSize.valueOf((String) value),
                         DataSize::toString),
+                new PropertyMetadata<>(
+                        QUERY_MAX_TOTAL_MEMORY,
+                        "Maximum amount of distributed total memory a query can use",
+                        VARCHAR,
+                        DataSize.class,
+                        memoryManagerConfig.getMaxQueryTotalMemory(),
+                        true,
+                        value -> DataSize.valueOf((String) value),
+                        DataSize::toString),
                 booleanSessionProperty(
                         RESOURCE_OVERCOMMIT,
                         "Use resources which are not guaranteed to be available to the query",
@@ -280,7 +298,7 @@ public final class SystemSessionProperties
                 integerSessionProperty(
                         CONCURRENT_LIFESPANS_PER_NODE,
                         "Experimental: Run a fixed number of groups concurrently for eligible JOINs",
-                        -1,
+                        featuresConfig.getConcurrentLifespansPerTask(),
                         false),
                 new PropertyMetadata<>(
                         SPILL_ENABLED,
@@ -314,11 +332,6 @@ public final class SystemSessionProperties
                         featuresConfig.isOptimizeMixedDistinctAggregations(),
                         false),
                 booleanSessionProperty(
-                        LEGACY_ORDER_BY,
-                        "Use legacy rules for column resolution in ORDER BY clause",
-                        featuresConfig.isLegacyOrderBy(),
-                        false),
-                booleanSessionProperty(
                         LEGACY_ROUND_N_BIGINT,
                         "Allow ROUND(x, d) to accept d being BIGINT",
                         featuresConfig.isLegacyRoundNBigint(),
@@ -327,6 +340,11 @@ public final class SystemSessionProperties
                         LEGACY_JOIN_USING,
                         "Use legacy behavior for JOIN ... USING clause",
                         featuresConfig.isLegacyJoinUsing(),
+                        false),
+                booleanSessionProperty(
+                        LEGACY_ROW_FIELD_ORDINAL_ACCESS,
+                        "Allow accessing anonymous row field with .field0, .field1, ...",
+                        featuresConfig.isLegacyRowFieldOrdinalAccess(),
                         false),
                 booleanSessionProperty(
                         ITERATIVE_OPTIMIZER,
@@ -354,7 +372,7 @@ public final class SystemSessionProperties
                         false),
                 booleanSessionProperty(
                         LEGACY_TIMESTAMP,
-                        "Use legacy TIME & TIMESTAMP semantics",
+                        "Use legacy TIME & TIMESTAMP semantics (warning: this will be removed)",
                         featuresConfig.isLegacyTimestamp(),
                         true),
                 booleanSessionProperty(
@@ -400,7 +418,17 @@ public final class SystemSessionProperties
                         USE_MARK_DISTINCT,
                         "Implement DISTINCT aggregations using MarkDistinct",
                         featuresConfig.isUseMarkDistinct(),
-                        false));
+                        false),
+                booleanSessionProperty(
+                        PREFER_PARTITIAL_AGGREGATION,
+                        "Prefer splitting aggregations into partial and final stages",
+                        featuresConfig.isPreferPartialAggregation(),
+                        false),
+                integerSessionProperty(
+                        MAX_GROUPING_SETS,
+                        "Maximum number of grouping sets in a GROUP BY",
+                        featuresConfig.getMaxGroupingSets(),
+                        true));
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -431,6 +459,11 @@ public final class SystemSessionProperties
     public static int getHashPartitionCount(Session session)
     {
         return session.getSystemProperty(HASH_PARTITION_COUNT, Integer.class);
+    }
+
+    public static boolean isGroupedExecutionForJoinEnabled(Session session)
+    {
+        return session.getSystemProperty(GROUPED_EXECUTION_FOR_AGGREGATION, Boolean.class);
     }
 
     public static boolean preferStreamingOperators(Session session)
@@ -488,6 +521,11 @@ public final class SystemSessionProperties
         return session.getSystemProperty(QUERY_MAX_MEMORY, DataSize.class);
     }
 
+    public static DataSize getQueryMaxTotalMemory(Session session)
+    {
+        return session.getSystemProperty(QUERY_MAX_TOTAL_MEMORY, DataSize.class);
+    }
+
     public static Duration getQueryMaxRunTime(Session session)
     {
         return session.getSystemProperty(QUERY_MAX_RUN_TIME, Duration.class);
@@ -531,11 +569,11 @@ public final class SystemSessionProperties
     public static OptionalInt getConcurrentLifespansPerNode(Session session)
     {
         Integer result = session.getSystemProperty(CONCURRENT_LIFESPANS_PER_NODE, Integer.class);
-        if (result == -1) {
+        if (result == 0) {
             return OptionalInt.empty();
         }
         else {
-            checkArgument(result > 0, "Concurrent lifespans per node must be positive if set");
+            checkArgument(result > 0, "Concurrent lifespans per node must be positive if set to non-zero");
             return OptionalInt.of(result);
         }
     }
@@ -579,11 +617,6 @@ public final class SystemSessionProperties
         return session.getSystemProperty(OPTIMIZE_DISTINCT_AGGREGATIONS, Boolean.class);
     }
 
-    public static boolean isLegacyOrderByEnabled(Session session)
-    {
-        return session.getSystemProperty(LEGACY_ORDER_BY, Boolean.class);
-    }
-
     @Deprecated
     public static boolean isLegacyRoundNBigint(Session session)
     {
@@ -593,6 +626,11 @@ public final class SystemSessionProperties
     public static boolean isLegacyJoinUsingEnabled(Session session)
     {
         return session.getSystemProperty(LEGACY_JOIN_USING, Boolean.class);
+    }
+
+    public static boolean isLegacyRowFieldOrdinalAccessEnabled(Session session)
+    {
+        return session.getSystemProperty(LEGACY_ROW_FIELD_ORDINAL_ACCESS, Boolean.class);
     }
 
     public static boolean isNewOptimizerEnabled(Session session)
@@ -659,6 +697,16 @@ public final class SystemSessionProperties
     public static boolean useMarkDistinct(Session session)
     {
         return session.getSystemProperty(USE_MARK_DISTINCT, Boolean.class);
+    }
+
+    public static boolean preferPartialAggregation(Session session)
+    {
+        return session.getSystemProperty(PREFER_PARTITIAL_AGGREGATION, Boolean.class);
+    }
+
+    public static int getMaxGroupingSets(Session session)
+    {
+        return session.getSystemProperty(MAX_GROUPING_SETS, Integer.class);
     }
 
     private static int validateValueIsPowerOfTwo(Object value, String property)

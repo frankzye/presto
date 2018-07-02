@@ -61,6 +61,7 @@ import com.facebook.presto.sql.tree.GroupBy;
 import com.facebook.presto.sql.tree.GroupingOperation;
 import com.facebook.presto.sql.tree.GroupingSets;
 import com.facebook.presto.sql.tree.Identifier;
+import com.facebook.presto.sql.tree.IfExpression;
 import com.facebook.presto.sql.tree.Insert;
 import com.facebook.presto.sql.tree.Intersect;
 import com.facebook.presto.sql.tree.IntervalLiteral;
@@ -78,9 +79,12 @@ import com.facebook.presto.sql.tree.LongLiteral;
 import com.facebook.presto.sql.tree.NaturalJoin;
 import com.facebook.presto.sql.tree.Node;
 import com.facebook.presto.sql.tree.NotExpression;
+import com.facebook.presto.sql.tree.NullIfExpression;
 import com.facebook.presto.sql.tree.NullLiteral;
 import com.facebook.presto.sql.tree.OrderBy;
 import com.facebook.presto.sql.tree.Parameter;
+import com.facebook.presto.sql.tree.PathElement;
+import com.facebook.presto.sql.tree.PathSpecification;
 import com.facebook.presto.sql.tree.Prepare;
 import com.facebook.presto.sql.tree.Property;
 import com.facebook.presto.sql.tree.QualifiedName;
@@ -97,6 +101,7 @@ import com.facebook.presto.sql.tree.Rollup;
 import com.facebook.presto.sql.tree.Row;
 import com.facebook.presto.sql.tree.Select;
 import com.facebook.presto.sql.tree.SelectItem;
+import com.facebook.presto.sql.tree.SetPath;
 import com.facebook.presto.sql.tree.SetSession;
 import com.facebook.presto.sql.tree.ShowCatalogs;
 import com.facebook.presto.sql.tree.ShowColumns;
@@ -124,7 +129,6 @@ import com.facebook.presto.sql.tree.Unnest;
 import com.facebook.presto.sql.tree.Values;
 import com.facebook.presto.sql.tree.With;
 import com.facebook.presto.sql.tree.WithQuery;
-import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import org.testng.annotations.Test;
@@ -155,7 +159,6 @@ import static com.facebook.presto.sql.tree.SortItem.Ordering.ASCENDING;
 import static com.facebook.presto.sql.tree.SortItem.Ordering.DESCENDING;
 import static java.lang.String.format;
 import static java.util.Collections.emptyList;
-import static java.util.Collections.nCopies;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -403,11 +406,38 @@ public class TestSqlParser
     {
         assertInvalidExpression("coalesce()", "The 'coalesce' function must have at least two arguments");
         assertInvalidExpression("coalesce(5)", "The 'coalesce' function must have at least two arguments");
+        assertInvalidExpression("coalesce(1, 2) filter (where true)", "FILTER not valid for 'coalesce' function");
+        assertInvalidExpression("coalesce(1, 2) OVER ()", "OVER clause not valid for 'coalesce' function");
         assertExpression("coalesce(13, 42)", new CoalesceExpression(new LongLiteral("13"), new LongLiteral("42")));
         assertExpression("coalesce(6, 7, 8)", new CoalesceExpression(new LongLiteral("6"), new LongLiteral("7"), new LongLiteral("8")));
         assertExpression("coalesce(13, null)", new CoalesceExpression(new LongLiteral("13"), new NullLiteral()));
         assertExpression("coalesce(null, 13)", new CoalesceExpression(new NullLiteral(), new LongLiteral("13")));
         assertExpression("coalesce(null, null)", new CoalesceExpression(new NullLiteral(), new NullLiteral()));
+    }
+
+    @Test
+    public void testIf()
+    {
+        assertExpression("if(true, 1, 0)", new IfExpression(new BooleanLiteral("true"), new LongLiteral("1"), new LongLiteral("0")));
+        assertExpression("if(true, 3, null)", new IfExpression(new BooleanLiteral("true"), new LongLiteral("3"), new NullLiteral()));
+        assertExpression("if(false, null, 4)", new IfExpression(new BooleanLiteral("false"), new NullLiteral(), new LongLiteral("4")));
+        assertExpression("if(false, null, null)", new IfExpression(new BooleanLiteral("false"), new NullLiteral(), new NullLiteral()));
+        assertExpression("if(true, 3)", new IfExpression(new BooleanLiteral("true"), new LongLiteral("3"), null));
+        assertInvalidExpression("IF(true)", "Invalid number of arguments for 'if' function");
+        assertInvalidExpression("IF(true, 1, 0) FILTER (WHERE true)", "FILTER not valid for 'if' function");
+        assertInvalidExpression("IF(true, 1, 0) OVER()", "OVER clause not valid for 'if' function");
+    }
+
+    @Test
+    public void testNullIf()
+    {
+        assertExpression("nullif(42, 87)", new NullIfExpression(new LongLiteral("42"), new LongLiteral("87")));
+        assertExpression("nullif(42, null)", new NullIfExpression(new LongLiteral("42"), new NullLiteral()));
+        assertExpression("nullif(null, null)", new NullIfExpression(new NullLiteral(), new NullLiteral()));
+        assertInvalidExpression("nullif(1)", "Invalid number of arguments for 'nullif' function");
+        assertInvalidExpression("nullif(1, 2, 3)", "Invalid number of arguments for 'nullif' function");
+        assertInvalidExpression("nullif(42, 87) filter (where true)", "FILTER not valid for 'nullif' function");
+        assertInvalidExpression("nullif(42, 87) OVER ()", "OVER clause not valid for 'nullif' function");
     }
 
     @Test
@@ -544,158 +574,11 @@ public class TestSqlParser
                         new LongLiteral("3"))));
     }
 
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:1: no viable alternative at input '<EOF>'")
-    public void testEmptyExpression()
-    {
-        SQL_PARSER.createExpression("");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:1: no viable alternative at input '<EOF>'")
-    public void testEmptyStatement()
-    {
-        SQL_PARSER.createStatement("");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:7: extraneous input 'x' expecting\\E.*")
-    public void testExpressionWithTrailingJunk()
-    {
-        SQL_PARSER.createExpression("1 + 1 x");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:1: extraneous input '@'\\E.*")
-    public void testTokenizeErrorStartOfLine()
-    {
-        SQL_PARSER.createStatement("@select");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:25: extraneous input '@'\\E.*")
-    public void testTokenizeErrorMiddleOfLine()
-    {
-        SQL_PARSER.createStatement("select * from foo where @what");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:15: extraneous input\\E.*")
-    public void testTokenizeErrorIncompleteToken()
-    {
-        SQL_PARSER.createStatement("select * from 'oops");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 3:1: extraneous input 'from' expecting\\E.*")
-    public void testParseErrorStartOfLine()
-    {
-        SQL_PARSER.createStatement("select *\nfrom x\nfrom");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 3:7: mismatched input 'from'\\E.*")
-    public void testParseErrorMiddleOfLine()
-    {
-        SQL_PARSER.createStatement("select *\nfrom x\nwhere from");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:14: no viable alternative at input '<EOF>'")
-    public void testParseErrorEndOfInput()
-    {
-        SQL_PARSER.createStatement("select * from");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:16: no viable alternative at input '<EOF>'")
-    public void testParseErrorEndOfInputWhitespace()
-    {
-        SQL_PARSER.createStatement("select * from  ");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:15: backquoted identifiers are not supported; use double quotes to quote identifiers")
-    public void testParseErrorBackquotes()
-    {
-        SQL_PARSER.createStatement("select * from `foo`");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:19: backquoted identifiers are not supported; use double quotes to quote identifiers")
-    public void testParseErrorBackquotesEndOfInput()
-    {
-        SQL_PARSER.createStatement("select * from foo `bar`");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:8: identifiers must not start with a digit; surround the identifier with double quotes")
-    public void testParseErrorDigitIdentifiers()
-    {
-        SQL_PARSER.createStatement("select 1x from dual");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:15: identifiers must not contain '@'")
-    public void testIdentifierWithAtSign()
-    {
-        SQL_PARSER.createStatement("select * from foo@bar");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:15: identifiers must not contain ':'")
-    public void testIdentifierWithColon()
-    {
-        SQL_PARSER.createStatement("select * from foo:bar");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:35: mismatched input 'order' expecting .*")
-    public void testParseErrorDualOrderBy()
-    {
-        SQL_PARSER.createStatement("select fuu from dual order by fuu order by fuu");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:31: mismatched input 'order' expecting <EOF>")
-    public void testParseErrorReverseOrderByLimit()
-    {
-        SQL_PARSER.createStatement("select fuu from dual limit 10 order by fuu");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:1: Invalid numeric literal: 12223222232535343423232435343")
-    public void testParseErrorInvalidPositiveLongCast()
-    {
-        SQL_PARSER.createStatement("select CAST(12223222232535343423232435343 AS BIGINT)");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:1: Invalid numeric literal: 12223222232535343423232435343")
-    public void testParseErrorInvalidNegativeLongCast()
-    {
-        SQL_PARSER.createStatement("select CAST(-12223222232535343423232435343 AS BIGINT)");
-    }
-
-    @Test
-    public void testParsingExceptionPositionInfo()
-    {
-        try {
-            SQL_PARSER.createStatement("select *\nfrom x\nwhere from");
-            fail("expected exception");
-        }
-        catch (ParsingException e) {
-            assertTrue(e.getMessage().startsWith("line 3:7: mismatched input 'from'"));
-            assertTrue(e.getErrorMessage().startsWith("mismatched input 'from'"));
-            assertEquals(e.getLineNumber(), 3);
-            assertEquals(e.getColumnNumber(), 7);
-        }
-    }
-
     @Test
     public void testAllowIdentifierColon()
     {
         SqlParser sqlParser = new SqlParser(new SqlParserOptions().allowIdentifierSymbol(COLON));
         sqlParser.createStatement("select * from foo:bar");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:12: no viable alternative at input\\E.*")
-    public void testInvalidArguments()
-    {
-        SQL_PARSER.createStatement("select foo(,1)");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:20: mismatched input\\E.*")
-    public void testInvalidArguments2()
-    {
-        SQL_PARSER.createStatement("select foo(DISTINCT)");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:21: extraneous input\\E.*")
-    public void testInvalidArguments3()
-    {
-        SQL_PARSER.createStatement("select foo(DISTINCT ,1)");
     }
 
     @SuppressWarnings("deprecation")
@@ -750,22 +633,6 @@ public class TestSqlParser
     public void testCurrentTimestamp()
     {
         assertExpression("CURRENT_TIMESTAMP", new CurrentTime(CurrentTime.Type.TIMESTAMP));
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:1: expression is too large \\(stack overflow while parsing\\)")
-    public void testStackOverflowExpression()
-    {
-        for (int size = 3000; size <= 100_000; size *= 2) {
-            SQL_PARSER.createExpression(Joiner.on(" OR ").join(nCopies(size, "x = y")));
-        }
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "line 1:1: statement is too large \\(stack overflow while parsing\\)")
-    public void testStackOverflowStatement()
-    {
-        for (int size = 6000; size <= 100_000; size *= 2) {
-            SQL_PARSER.createStatement("SELECT " + Joiner.on(" OR ").join(nCopies(size, "x = y")));
-        }
     }
 
     @Test
@@ -1129,12 +996,6 @@ public class TestSqlParser
     }
 
     @Test
-    public void testGroupingFunctionWithExpressions()
-    {
-        assertInvalidStatement("SELECT grouping(a+2) FROM (VALUES (1)) AS t (a) GROUP BY a+2", "line 1:18: mismatched input '+' expecting {'.', ')', ','}");
-    }
-
-    @Test
     public void testCreateSchema()
     {
         assertStatement("CREATE SCHEMA test",
@@ -1294,18 +1155,6 @@ public class TestSqlParser
                         true,
                         ImmutableList.of(),
                         Optional.of("test")));
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:19: no viable alternative at input 'CREATE TABLE foo ()'\\E.*")
-    public void testParseCreateTableAsEmptyAlias()
-    {
-        SQL_PARSER.createStatement("CREATE TABLE foo () AS (VALUES 1)");
-    }
-
-    @Test(expectedExceptions = ParsingException.class, expectedExceptionsMessageRegExp = "\\Qline 1:19: no viable alternative at input 'CREATE TABLE foo (*'\\E.*")
-    public void testParseCreateTableAsAsteriskAlias()
-    {
-        SQL_PARSER.createStatement("CREATE TABLE foo (*) AS (VALUES 1)");
     }
 
     @Test
@@ -1567,6 +1416,42 @@ public class TestSqlParser
                 new ShowGrants(false, Optional.of(QualifiedName.of("t"))));
         assertStatement("SHOW GRANTS",
                 new ShowGrants(false, Optional.empty()));
+    }
+
+    @Test
+    public void testSetPath()
+    {
+        assertStatement("SET PATH iLikeToEat.apples, andBananas",
+                new SetPath(new PathSpecification(Optional.empty(), ImmutableList.of(
+                        new PathElement(Optional.of(new Identifier("iLikeToEat")), new Identifier("apples")),
+                        new PathElement(Optional.empty(), new Identifier("andBananas"))))));
+
+        assertStatement("SET PATH \"schemas,with\".\"grammar.in\", \"their!names\"",
+                new SetPath(new PathSpecification(Optional.empty(), ImmutableList.of(
+                        new PathElement(Optional.of(new Identifier("schemas,with")), new Identifier("grammar.in")),
+                        new PathElement(Optional.empty(), new Identifier("their!names"))))));
+
+        assertStatement("SET PATH \"\"",
+                new SetPath(new PathSpecification(Optional.empty(), ImmutableList.of(
+                        new PathElement(Optional.empty(), new Identifier(""))))));
+
+        try {
+            assertStatement("SET PATH one.too.many, qualifiers",
+                    new SetPath(new PathSpecification(Optional.empty(), ImmutableList.of(
+                            new PathElement(Optional.empty(), new Identifier("dummyValue"))))));
+            fail();
+        }
+        catch (RuntimeException e) {
+            //expected - schema can only be qualified by catalog
+        }
+
+        try {
+            SQL_PARSER.createStatement("SET PATH ", new ParsingOptions());
+            fail();
+        }
+        catch (RuntimeException e) {
+            //expected - some form of parameter is required
+        }
     }
 
     @Test
@@ -2137,24 +2022,6 @@ public class TestSqlParser
     {
         assertParsed(query, expected, SQL_PARSER.createStatement(query));
         assertFormattedSql(SQL_PARSER, expected);
-    }
-
-    private static void assertInvalidStatement(String query, String expectedMessage)
-    {
-        try {
-            SQL_PARSER.createStatement(query);
-            fail(format("Expected statement to fail: %s", query));
-        }
-        catch (RuntimeException ex) {
-            assertExceptionMessage(query, ex, expectedMessage);
-        }
-    }
-
-    private static void assertExceptionMessage(String sql, Exception exception, String expectedMessage)
-    {
-        if (!exception.getMessage().equals(expectedMessage)) {
-            fail(format("Expected exception message '%s' to match '%s' for query: %s", exception.getMessage(), expectedMessage, sql));
-        }
     }
 
     private static void assertExpression(String expression, Expression expected)

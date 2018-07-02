@@ -44,12 +44,14 @@ import java.sql.Struct;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.TimeZone;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
@@ -76,6 +78,7 @@ public class PrestoConnection
     private final AtomicReference<Locale> locale = new AtomicReference<>();
     private final AtomicReference<Integer> networkTimeoutMillis = new AtomicReference<>(Ints.saturatedCast(MINUTES.toMillis(2)));
     private final AtomicReference<ServerInfo> serverInfo = new AtomicReference<>();
+    private final AtomicLong nextStatementId = new AtomicLong(1);
 
     private final URI jdbcUri;
     private final URI httpUri;
@@ -115,7 +118,8 @@ public class PrestoConnection
             throws SQLException
     {
         checkOpen();
-        throw new NotImplementedException("Connection", "prepareStatement");
+        String name = "statement" + nextStatementId.getAndIncrement();
+        return new PrestoPreparedStatement(this, name, sql);
     }
 
     @Override
@@ -633,7 +637,7 @@ public class PrestoConnection
     StatementClient startQuery(String sql, Map<String, String> sessionPropertiesOverride)
     {
         String source = firstNonNull(clientInfo.get("ApplicationName"), "presto-jdbc");
-
+        Optional<String> traceToken = Optional.ofNullable(clientInfo.get("TraceToken"));
         Iterable<String> clientTags = Splitter.on(',').trimResults().omitEmptyStrings()
                 .split(nullToEmpty(clientInfo.get("ClientTags")));
 
@@ -648,6 +652,7 @@ public class PrestoConnection
                 httpUri,
                 user,
                 source,
+                traceToken,
                 ImmutableSet.copyOf(clientTags),
                 clientInfo.get("ClientInfo"),
                 catalog.get(),

@@ -195,6 +195,17 @@ public final class PlanMatchPattern
     }
 
     public static PlanMatchPattern aggregation(
+            Map<String, ExpectedValueProvider<FunctionCall>> aggregations,
+            Step step,
+            PlanMatchPattern source)
+    {
+        PlanMatchPattern result = node(AggregationNode.class, source).with(new AggregationStepMatcher(step));
+        aggregations.entrySet().forEach(
+                aggregation -> result.withAlias(aggregation.getKey(), new AggregationFunctionMatcher(aggregation.getValue())));
+        return result;
+    }
+
+    public static PlanMatchPattern aggregation(
             List<List<String>> groupingSets,
             Map<Optional<String>, ExpectedValueProvider<FunctionCall>> aggregations,
             Map<Symbol, Symbol> masks,
@@ -202,7 +213,19 @@ public final class PlanMatchPattern
             Step step,
             PlanMatchPattern source)
     {
-        PlanMatchPattern result = node(AggregationNode.class, source).with(new AggregationMatcher(groupingSets, masks, groupId, step));
+        return aggregation(groupingSets, aggregations, ImmutableList.of(), masks, groupId, step, source);
+    }
+
+    public static PlanMatchPattern aggregation(
+            List<List<String>> groupingSets,
+            Map<Optional<String>, ExpectedValueProvider<FunctionCall>> aggregations,
+            List<String> preGroupedSymbols,
+            Map<Symbol, Symbol> masks,
+            Optional<Symbol> groupId,
+            Step step,
+            PlanMatchPattern source)
+    {
+        PlanMatchPattern result = node(AggregationNode.class, source).with(new AggregationMatcher(groupingSets, preGroupedSymbols, masks, groupId, step));
         aggregations.entrySet().forEach(
                 aggregation -> result.withAlias(aggregation.getKey(), new AggregationFunctionMatcher(aggregation.getValue())));
         return result;
@@ -383,9 +406,13 @@ public final class PlanMatchPattern
         return new SymbolAlias(alias);
     }
 
-    public static PlanMatchPattern filter(String predicate, PlanMatchPattern source)
+    public static PlanMatchPattern filter(String expectedPredicate, PlanMatchPattern source)
     {
-        Expression expectedPredicate = rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(predicate));
+        return filter(rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(expectedPredicate)), source);
+    }
+
+    public static PlanMatchPattern filter(Expression expectedPredicate, PlanMatchPattern source)
+    {
         return node(FilterNode.class, source).with(new FilterMatcher(expectedPredicate));
     }
 

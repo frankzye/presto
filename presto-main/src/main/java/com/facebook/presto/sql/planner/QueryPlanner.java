@@ -14,7 +14,6 @@
 package com.facebook.presto.sql.planner;
 
 import com.facebook.presto.Session;
-import com.facebook.presto.SystemSessionProperties;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.spi.ColumnHandle;
@@ -154,7 +153,7 @@ class QueryPlanner
         List<Expression> outputs = analysis.getOutputExpressions(node);
         builder = handleSubqueries(builder, node, outputs);
 
-        if (node.getOrderBy().isPresent() && !SystemSessionProperties.isLegacyOrderByEnabled(session)) {
+        if (node.getOrderBy().isPresent()) {
             if (analysis.getGroupingSets(node).isEmpty()) {
                 // ORDER BY requires both output and source fields to be visible if there are no aggregations
                 builder = project(builder, outputs, fromRelationPlan);
@@ -561,6 +560,7 @@ class QueryPlanner
                 subPlan.getRoot(),
                 aggregations,
                 groupingSymbols,
+                ImmutableList.of(),
                 AggregationNode.Step.SINGLE,
                 Optional.empty(),
                 groupIdSymbol);
@@ -771,6 +771,7 @@ class QueryPlanner
                             subPlan.getRoot(),
                             ImmutableMap.of(),
                             ImmutableList.of(subPlan.getRoot().getOutputSymbols()),
+                            ImmutableList.of(),
                             AggregationNode.Step.SINGLE,
                             Optional.empty(),
                             Optional.empty()));

@@ -142,12 +142,16 @@ fi
 # catch terminate signals
 trap terminate INT TERM EXIT
 
-if [[ "$ENVIRONMENT" == "singlenode" || "$ENVIRONMENT" == "multinode" ]]; then
-  EXTERNAL_SERVICES="hadoop-master mysql postgres cassandra"
-elif [[ "$ENVIRONMENT" == "singlenode-sqlserver" ]]; then
+if [[ "$ENVIRONMENT" == "singlenode-sqlserver" ]]; then
   EXTERNAL_SERVICES="hadoop-master sqlserver"
 elif [[ "$ENVIRONMENT" == "singlenode-ldap" ]]; then
   EXTERNAL_SERVICES="hadoop-master ldapserver"
+elif [[ "$ENVIRONMENT" == "singlenode-mysql" ]]; then
+  EXTERNAL_SERVICES="hadoop-master mysql"
+elif [[ "$ENVIRONMENT" == "singlenode-postgresql" ]]; then
+  EXTERNAL_SERVICES="hadoop-master postgres"
+elif [[ "$ENVIRONMENT" == "singlenode-cassandra" ]]; then
+  EXTERNAL_SERVICES="hadoop-master cassandra"
 else
   EXTERNAL_SERVICES="hadoop-master"
 fi
@@ -162,15 +166,15 @@ environment_compose logs --no-color -f ${EXTERNAL_SERVICES} &
 
 HADOOP_LOGS_PID=$!
 
-# wait until hadoop processes is started
-retry check_hadoop
-
 # start presto containers
 environment_compose up -d ${PRESTO_SERVICES}
 
 # start docker logs for presto containers
 environment_compose logs --no-color -f ${PRESTO_SERVICES} &
 PRESTO_LOGS_PID=$!
+
+# wait until hadoop processes are started
+retry check_hadoop
 
 # wait until presto is started
 retry check_presto

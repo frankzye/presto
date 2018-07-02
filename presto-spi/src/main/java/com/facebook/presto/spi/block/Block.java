@@ -110,7 +110,7 @@ public interface Block
     }
 
     /**
-     * Appends the value at {@code position} to {@code blockBuilder}.
+     * Appends the value at {@code position} to {@code blockBuilder} and close the entry.
      */
     void writePositionTo(int position, BlockBuilder blockBuilder);
 
@@ -192,7 +192,7 @@ public interface Block
     /**
      * Get the encoding for this block.
      */
-    BlockEncoding getEncoding();
+    String getEncodingName();
 
     /**
      * Create a new block from the current block by keeping the same elements
@@ -238,6 +238,15 @@ public interface Block
      * entire block.
      */
     Block copyRegion(int position, int length);
+
+    /**
+     * Is it possible the block may have a null value?  If false, the block can not contain
+     * a null, but if true, the block may or may not have a null.
+     */
+    default boolean mayHaveNull()
+    {
+        return true;
+    }
 
     /**
      * Is the specified position null?
