@@ -96,10 +96,12 @@ public class BenchmarkDriverOptions
                 null,
                 catalog,
                 schema,
+                null,
                 TimeZone.getDefault().getID(),
                 Locale.getDefault(),
                 ImmutableMap.of(),
                 toProperties(this.sessionProperties),
+                ImmutableMap.of(),
                 ImmutableMap.of(),
                 null,
                 clientRequestTimeout);

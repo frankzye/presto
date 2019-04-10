@@ -14,20 +14,21 @@
 package com.facebook.presto.operator;
 
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionKind;
-import com.facebook.presto.metadata.Signature;
 import com.facebook.presto.metadata.SqlScalarFunction;
 import com.facebook.presto.operator.annotations.ImplementationDependency;
 import com.facebook.presto.operator.annotations.LiteralImplementationDependency;
 import com.facebook.presto.operator.annotations.TypeImplementationDependency;
 import com.facebook.presto.operator.scalar.ParametricScalar;
 import com.facebook.presto.operator.scalar.ScalarFunctionImplementation;
+import com.facebook.presto.operator.scalar.annotations.ParametricScalarImplementation.ParametricScalarImplementationChoice;
 import com.facebook.presto.operator.scalar.annotations.ScalarFromAnnotationsParser;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.function.Description;
+import com.facebook.presto.spi.function.FunctionKind;
 import com.facebook.presto.spi.function.IsNull;
 import com.facebook.presto.spi.function.LiteralParameters;
 import com.facebook.presto.spi.function.ScalarFunction;
+import com.facebook.presto.spi.function.Signature;
 import com.facebook.presto.spi.function.SqlNullable;
 import com.facebook.presto.spi.function.SqlType;
 import com.facebook.presto.spi.function.TypeParameter;
@@ -42,11 +43,11 @@ import org.testng.annotations.Test;
 
 import java.util.List;
 
-import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.DoubleType.DOUBLE;
@@ -148,7 +149,7 @@ public class TestAnnotationEngineForScalars
         @SqlType(StandardTypes.DOUBLE)
         public static double fun(
                 @SqlType(StandardTypes.DOUBLE) double v,
-                @SqlNullable @SqlType(StandardTypes.DOUBLE) double v2,
+                @SqlType(StandardTypes.DOUBLE) double v2,
                 @IsNull boolean v2isNull)
         {
             return v;
@@ -424,7 +425,9 @@ public class TestAnnotationEngineForScalars
         assertEquals(functions.size(), 1);
         ParametricScalar scalar = (ParametricScalar) functions.get(0);
         assertImplementationCount(scalar, 0, 0, 1);
-        List<ImplementationDependency> dependencies = scalar.getImplementations().getGenericImplementations().get(0).getDependencies();
+        List<ParametricScalarImplementationChoice> parametricScalarImplementationChoices = scalar.getImplementations().getGenericImplementations().get(0).getChoices();
+        assertEquals(parametricScalarImplementationChoices.size(), 1);
+        List<ImplementationDependency> dependencies = parametricScalarImplementationChoices.get(0).getDependencies();
         assertEquals(dependencies.size(), 1);
         assertTrue(dependencies.get(0) instanceof LiteralImplementationDependency);
 
@@ -482,9 +485,11 @@ public class TestAnnotationEngineForScalars
         assertEquals(functions.size(), 1);
         ParametricScalar scalar = (ParametricScalar) functions.get(0);
         assertImplementationCount(scalar, 2, 0, 1);
-        List<ImplementationDependency> dependencies = scalar.getImplementations().getGenericImplementations().get(0).getDependencies();
+        List<ParametricScalarImplementationChoice> parametricScalarImplementationChoices = scalar.getImplementations().getGenericImplementations().get(0).getChoices();
+        assertEquals(parametricScalarImplementationChoices.size(), 1);
+        List<ImplementationDependency> dependencies = parametricScalarImplementationChoices.get(0).getDependencies();
         assertEquals(dependencies.size(), 0);
-        List<ImplementationDependency> constructorDependencies = scalar.getImplementations().getGenericImplementations().get(0).getConstructorDependencies();
+        List<ImplementationDependency> constructorDependencies = parametricScalarImplementationChoices.get(0).getConstructorDependencies();
         assertEquals(constructorDependencies.size(), 1);
         assertTrue(constructorDependencies.get(0) instanceof TypeImplementationDependency);
 
@@ -561,7 +566,9 @@ public class TestAnnotationEngineForScalars
         assertEquals(functions.size(), 1);
         ParametricScalar scalar = (ParametricScalar) functions.get(0);
         assertImplementationCount(scalar, 0, 0, 1);
-        List<ImplementationDependency> dependencies = scalar.getImplementations().getGenericImplementations().get(0).getDependencies();
+        List<ParametricScalarImplementationChoice> parametricScalarImplementationChoices = scalar.getImplementations().getGenericImplementations().get(0).getChoices();
+        assertEquals(parametricScalarImplementationChoices.size(), 1);
+        List<ImplementationDependency> dependencies = parametricScalarImplementationChoices.get(0).getDependencies();
         assertEquals(dependencies.size(), 1);
 
         assertEquals(scalar.getSignature(), expectedSignature);

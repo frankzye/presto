@@ -41,8 +41,9 @@ import java.util.concurrent.TimeUnit;
         "task.level-absolute-priority"})
 public class TaskManagerConfig
 {
-    private boolean verboseStats;
+    private boolean perOperatorCpuTimerEnabled = true;
     private boolean taskCpuTimerEnabled = true;
+    private boolean statisticsCpuTimerEnabled = true;
     private DataSize maxPartialAggregationMemoryUsage = new DataSize(16, Unit.MEGABYTE);
     private DataSize maxLocalExchangeBufferSize = new DataSize(32, Unit.MEGABYTE);
     private DataSize maxIndexMemoryUsage = new DataSize(64, Unit.MEGABYTE);
@@ -52,6 +53,7 @@ public class TaskManagerConfig
     private Integer initialSplitsPerNode;
     private int minDriversPerTask = 3;
     private int maxDriversPerTask = Integer.MAX_VALUE;
+    private int maxTasksPerStage = Integer.MAX_VALUE;
     private Duration splitConcurrencyAdjustmentInterval = new Duration(100, TimeUnit.MILLISECONDS);
 
     private DataSize sinkMaxBufferSize = new DataSize(32, Unit.MEGABYTE);
@@ -72,6 +74,8 @@ public class TaskManagerConfig
     private int taskYieldThreads = 3;
 
     private BigDecimal levelTimeMultiplier = new BigDecimal(2.0);
+
+    private boolean legacyLifespanCompletionCondition;
 
     @MinDuration("1ms")
     @MaxDuration("10s")
@@ -104,15 +108,16 @@ public class TaskManagerConfig
         return this;
     }
 
-    public boolean isVerboseStats()
+    public boolean isPerOperatorCpuTimerEnabled()
     {
-        return verboseStats;
+        return perOperatorCpuTimerEnabled;
     }
 
-    @Config("task.verbose-stats")
-    public TaskManagerConfig setVerboseStats(boolean verboseStats)
+    @LegacyConfig("task.verbose-stats")
+    @Config("task.per-operator-cpu-timer-enabled")
+    public TaskManagerConfig setPerOperatorCpuTimerEnabled(boolean perOperatorCpuTimerEnabled)
     {
-        this.verboseStats = verboseStats;
+        this.perOperatorCpuTimerEnabled = perOperatorCpuTimerEnabled;
         return this;
     }
 
@@ -125,6 +130,18 @@ public class TaskManagerConfig
     public TaskManagerConfig setTaskCpuTimerEnabled(boolean taskCpuTimerEnabled)
     {
         this.taskCpuTimerEnabled = taskCpuTimerEnabled;
+        return this;
+    }
+
+    public boolean isStatisticsCpuTimerEnabled()
+    {
+        return statisticsCpuTimerEnabled;
+    }
+
+    @Config("task.statistics-cpu-timer-enabled")
+    public TaskManagerConfig setStatisticsCpuTimerEnabled(boolean statisticsCpuTimerEnabled)
+    {
+        this.statisticsCpuTimerEnabled = statisticsCpuTimerEnabled;
         return this;
     }
 
@@ -281,6 +298,20 @@ public class TaskManagerConfig
         return this;
     }
 
+    @Min(1)
+    public int getMaxTasksPerStage()
+    {
+        return maxTasksPerStage;
+    }
+
+    @Config("stage.max-tasks-per-stage")
+    @ConfigDescription("Maximum number of tasks for a non source distributed stage")
+    public TaskManagerConfig setMaxTasksPerStage(int maxTasksPerStage)
+    {
+        this.maxTasksPerStage = maxTasksPerStage;
+        return this;
+    }
+
     @NotNull
     public DataSize getSinkMaxBufferSize()
     {
@@ -415,6 +446,20 @@ public class TaskManagerConfig
     public TaskManagerConfig setTaskYieldThreads(int taskYieldThreads)
     {
         this.taskYieldThreads = taskYieldThreads;
+        return this;
+    }
+
+    @Deprecated
+    public boolean isLegacyLifespanCompletionCondition()
+    {
+        return legacyLifespanCompletionCondition;
+    }
+
+    @Deprecated
+    @Config("task.legacy-lifespan-completion-condition")
+    public TaskManagerConfig setLegacyLifespanCompletionCondition(boolean legacyLifespanCompletionCondition)
+    {
+        this.legacyLifespanCompletionCondition = legacyLifespanCompletionCondition;
         return this;
     }
 }

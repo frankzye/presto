@@ -66,6 +66,7 @@ public final class DateTimeFunctions
 
     private static final ISOChronology UTC_CHRONOLOGY = ISOChronology.getInstanceUTC();
     private static final DateTimeField SECOND_OF_MINUTE = UTC_CHRONOLOGY.secondOfMinute();
+    private static final DateTimeField MILLISECOND_OF_SECOND = UTC_CHRONOLOGY.millisOfSecond();
     private static final DateTimeField MINUTE_OF_HOUR = UTC_CHRONOLOGY.minuteOfHour();
     private static final DateTimeField HOUR_OF_DAY = UTC_CHRONOLOGY.hourOfDay();
     private static final DateTimeField DAY_OF_WEEK = UTC_CHRONOLOGY.dayOfWeek();
@@ -169,7 +170,7 @@ public final class DateTimeFunctions
     {
         TimeZoneKey timeZoneKey;
         try {
-            timeZoneKey = getTimeZoneKeyForOffset((int) (hoursOffset * 60 + minutesOffset));
+            timeZoneKey = getTimeZoneKeyForOffset(toIntExact(hoursOffset * 60 + minutesOffset));
         }
         catch (IllegalArgumentException e) {
             throw new PrestoException(INVALID_FUNCTION_ARGUMENT, e);
@@ -373,8 +374,12 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.TIME)
     public static long addFieldValueTime(ConnectorSession session, @SqlType("varchar(x)") Slice unit, @SqlType(StandardTypes.BIGINT) long value, @SqlType(StandardTypes.TIME) long time)
     {
-        ISOChronology chronology = getChronology(session.getTimeZoneKey());
-        return modulo24Hour(chronology, getTimeField(chronology, unit).add(time, toIntExact(value)));
+        if (session.isLegacyTimestamp()) {
+            ISOChronology chronology = getChronology(session.getTimeZoneKey());
+            return modulo24Hour(chronology, getTimeField(chronology, unit).add(time, toIntExact(value)));
+        }
+
+        return modulo24Hour(getTimeField(UTC_CHRONOLOGY, unit).add(time, toIntExact(value)));
     }
 
     @Description("add the specified amount of time to the given time")
@@ -401,7 +406,11 @@ public final class DateTimeFunctions
             @SqlType(StandardTypes.BIGINT) long value,
             @SqlType(StandardTypes.TIMESTAMP) long timestamp)
     {
-        return getTimestampField(getChronology(session.getTimeZoneKey()), unit).add(timestamp, toIntExact(value));
+        if (session.isLegacyTimestamp()) {
+            return getTimestampField(getChronology(session.getTimeZoneKey()), unit).add(timestamp, toIntExact(value));
+        }
+
+        return getTimestampField(UTC_CHRONOLOGY, unit).add(timestamp, toIntExact(value));
     }
 
     @Description("add the specified amount of time to the given timestamp")
@@ -432,8 +441,13 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.BIGINT)
     public static long diffTime(ConnectorSession session, @SqlType("varchar(x)") Slice unit, @SqlType(StandardTypes.TIME) long time1, @SqlType(StandardTypes.TIME) long time2)
     {
-        ISOChronology chronology = getChronology(session.getTimeZoneKey());
-        return getTimeField(chronology, unit).getDifferenceAsLong(time2, time1);
+        if (session.isLegacyTimestamp()) {
+            // Session zone could have policy change on/around 1970-01-01, so we cannot use UTC
+            ISOChronology chronology = getChronology(session.getTimeZoneKey());
+            return getTimeField(chronology, unit).getDifferenceAsLong(time2, time1);
+        }
+
+        return getTimeField(UTC_CHRONOLOGY, unit).getDifferenceAsLong(time2, time1);
     }
 
     @Description("difference of the given times in the given unit")
@@ -458,7 +472,11 @@ public final class DateTimeFunctions
             @SqlType(StandardTypes.TIMESTAMP) long timestamp1,
             @SqlType(StandardTypes.TIMESTAMP) long timestamp2)
     {
-        return getTimestampField(getChronology(session.getTimeZoneKey()), unit).getDifferenceAsLong(timestamp2, timestamp1);
+        if (session.isLegacyTimestamp()) {
+            return getTimestampField(getChronology(session.getTimeZoneKey()), unit).getDifferenceAsLong(timestamp2, timestamp1);
+        }
+
+        return getTimestampField(UTC_CHRONOLOGY, unit).getDifferenceAsLong(timestamp2, timestamp1);
     }
 
     @Description("difference of the given times in the given unit")
@@ -683,12 +701,62 @@ public final class DateTimeFunctions
         }
     }
 
+    @Description("millisecond of the second of the given timestamp")
+    @ScalarFunction("millisecond")
+    @SqlType(StandardTypes.BIGINT)
+    public static long millisecondFromTimestamp(@SqlType(StandardTypes.TIMESTAMP) long timestamp)
+    {
+        // No need to check isLegacyTimestamp:
+        // * Under legacy semantics, the session zone matters. But a zone always has offset of whole minutes.
+        // * Under new semantics, timestamp is agnostic to the session zone.
+        return MILLISECOND_OF_SECOND.get(timestamp);
+    }
+
+    @Description("millisecond of the second of the given timestamp")
+    @ScalarFunction("millisecond")
+    @SqlType(StandardTypes.BIGINT)
+    public static long millisecondFromTimestampWithTimeZone(@SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE) long timestampWithTimeZone)
+    {
+        // No need to check the associated zone here. A zone always has offset of whole minutes.
+        return MILLISECOND_OF_SECOND.get(unpackMillisUtc(timestampWithTimeZone));
+    }
+
+    @Description("millisecond of the second of the given time")
+    @ScalarFunction("millisecond")
+    @SqlType(StandardTypes.BIGINT)
+    public static long millisecondFromTime(@SqlType(StandardTypes.TIME) long time)
+    {
+        // No need to check isLegacyTimestamp:
+        // * Under legacy semantics, the session zone matters. But a zone always has offset of whole minutes.
+        // * Under new semantics, time is agnostic to the session zone.
+        return MILLISECOND_OF_SECOND.get(time);
+    }
+
+    @Description("millisecond of the second of the given time")
+    @ScalarFunction("millisecond")
+    @SqlType(StandardTypes.BIGINT)
+    public static long millisecondFromTimeWithTimeZone(@SqlType(StandardTypes.TIME_WITH_TIME_ZONE) long time)
+    {
+        // No need to check the associated zone here. A zone always has offset of whole minutes.
+        return MILLISECOND_OF_SECOND.get(unpackMillisUtc(time));
+    }
+
+    @Description("millisecond of the second of the given interval")
+    @ScalarFunction("millisecond")
+    @SqlType(StandardTypes.BIGINT)
+    public static long millisecondFromInterval(@SqlType(StandardTypes.INTERVAL_DAY_TO_SECOND) long milliseconds)
+    {
+        return milliseconds % MILLISECONDS_IN_SECOND;
+    }
+
     @Description("second of the minute of the given timestamp")
     @ScalarFunction("second")
     @SqlType(StandardTypes.BIGINT)
     public static long secondFromTimestamp(@SqlType(StandardTypes.TIMESTAMP) long timestamp)
     {
-        // Time is effectively UTC so no need for a custom chronology
+        // No need to check isLegacyTimestamp:
+        // * Under legacy semantics, the session zone matters. But a zone always has offset of whole minutes.
+        // * Under new semantics, timestamp is agnostic to the session zone.
         return SECOND_OF_MINUTE.get(timestamp);
     }
 
@@ -697,7 +765,7 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.BIGINT)
     public static long secondFromTimestampWithTimeZone(@SqlType(StandardTypes.TIMESTAMP_WITH_TIME_ZONE) long timestampWithTimeZone)
     {
-        // Time is effectively UTC so no need for a custom chronology
+        // No need to check the associated zone here. A zone always has offset of whole minutes.
         return SECOND_OF_MINUTE.get(unpackMillisUtc(timestampWithTimeZone));
     }
 
@@ -706,7 +774,9 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.BIGINT)
     public static long secondFromTime(@SqlType(StandardTypes.TIME) long time)
     {
-        // Time is effectively UTC so no need for a custom chronology
+        // No need to check isLegacyTimestamp:
+        // * Under legacy semantics, the session zone matters. But a zone always has offset of whole minutes.
+        // * Under new semantics, time is agnostic to the session zone.
         return SECOND_OF_MINUTE.get(time);
     }
 
@@ -715,7 +785,7 @@ public final class DateTimeFunctions
     @SqlType(StandardTypes.BIGINT)
     public static long secondFromTimeWithTimeZone(@SqlType(StandardTypes.TIME_WITH_TIME_ZONE) long time)
     {
-        // Time is effectively UTC so no need for a custom chronology
+        // No need to check the associated zone here. A zone always has offset of whole minutes.
         return SECOND_OF_MINUTE.get(unpackMillisUtc(time));
     }
 

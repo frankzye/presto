@@ -52,11 +52,13 @@ public class InternalHiveSplit
     private final List<HivePartitionKey> partitionKeys;
     private final List<InternalHiveBlock> blocks;
     private final String partitionName;
-    private final OptionalInt bucketNumber;
+    private final OptionalInt readBucketNumber;
+    private final OptionalInt tableBucketNumber;
     private final boolean splittable;
     private final boolean forceLocalScheduling;
     private final Map<Integer, HiveTypeName> columnCoercions;
     private final Optional<BucketConversion> bucketConversion;
+    private final boolean s3SelectPushdownEnabled;
 
     private long start;
     private int currentBlockIndex;
@@ -70,11 +72,13 @@ public class InternalHiveSplit
             Properties schema,
             List<HivePartitionKey> partitionKeys,
             List<InternalHiveBlock> blocks,
-            OptionalInt bucketNumber,
+            OptionalInt readBucketNumber,
+            OptionalInt tableBucketNumber,
             boolean splittable,
             boolean forceLocalScheduling,
             Map<Integer, HiveTypeName> columnCoercions,
-            Optional<BucketConversion> bucketConversion)
+            Optional<BucketConversion> bucketConversion,
+            boolean s3SelectPushdownEnabled)
     {
         checkArgument(start >= 0, "start must be positive");
         checkArgument(end >= 0, "length must be positive");
@@ -84,7 +88,8 @@ public class InternalHiveSplit
         requireNonNull(schema, "schema is null");
         requireNonNull(partitionKeys, "partitionKeys is null");
         requireNonNull(blocks, "blocks is null");
-        requireNonNull(bucketNumber, "bucketNumber is null");
+        requireNonNull(readBucketNumber, "readBucketNumber is null");
+        requireNonNull(tableBucketNumber, "tableBucketNumber is null");
         requireNonNull(columnCoercions, "columnCoercions is null");
         requireNonNull(bucketConversion, "bucketConversion is null");
 
@@ -96,11 +101,13 @@ public class InternalHiveSplit
         this.schema = schema;
         this.partitionKeys = ImmutableList.copyOf(partitionKeys);
         this.blocks = ImmutableList.copyOf(blocks);
-        this.bucketNumber = bucketNumber;
+        this.readBucketNumber = readBucketNumber;
+        this.tableBucketNumber = tableBucketNumber;
         this.splittable = splittable;
         this.forceLocalScheduling = forceLocalScheduling;
         this.columnCoercions = ImmutableMap.copyOf(columnCoercions);
         this.bucketConversion = bucketConversion;
+        this.s3SelectPushdownEnabled = s3SelectPushdownEnabled;
     }
 
     public String getPath()
@@ -123,6 +130,11 @@ public class InternalHiveSplit
         return fileSize;
     }
 
+    public boolean isS3SelectPushdownEnabled()
+    {
+        return s3SelectPushdownEnabled;
+    }
+
     public Properties getSchema()
     {
         return schema;
@@ -138,9 +150,14 @@ public class InternalHiveSplit
         return partitionName;
     }
 
-    public OptionalInt getBucketNumber()
+    public OptionalInt getReadBucketNumber()
     {
-        return bucketNumber;
+        return readBucketNumber;
+    }
+
+    public OptionalInt getTableBucketNumber()
+    {
+        return tableBucketNumber;
     }
 
     public boolean isSplittable()

@@ -14,6 +14,11 @@
 package com.facebook.presto.hive.metastore;
 
 import com.facebook.presto.hive.HiveType;
+import com.facebook.presto.hive.PartitionStatistics;
+import com.facebook.presto.spi.security.PrestoPrincipal;
+import com.facebook.presto.spi.security.RoleGrant;
+import com.facebook.presto.spi.statistics.ColumnStatisticType;
+import com.facebook.presto.spi.type.Type;
 
 import java.util.List;
 import java.util.Map;
@@ -29,9 +34,15 @@ public interface ExtendedHiveMetastore
 
     Optional<Table> getTable(String databaseName, String tableName);
 
-    Map<String, HiveColumnStatistics> getTableColumnStatistics(String databaseName, String tableName);
+    Set<ColumnStatisticType> getSupportedColumnStatistics(Type type);
 
-    Map<String, Map<String, HiveColumnStatistics>> getPartitionColumnStatistics(String databaseName, String tableName, Set<String> partitionNames);
+    PartitionStatistics getTableStatistics(String databaseName, String tableName);
+
+    Map<String, PartitionStatistics> getPartitionStatistics(String databaseName, String tableName, Set<String> partitionNames);
+
+    void updateTableStatistics(String databaseName, String tableName, Function<PartitionStatistics, PartitionStatistics> update);
+
+    void updatePartitionStatistics(String databaseName, String tableName, String partitionName, Function<PartitionStatistics, PartitionStatistics> update);
 
     Optional<List<String>> getAllTables(String databaseName);
 
@@ -56,8 +67,6 @@ public interface ExtendedHiveMetastore
 
     void renameTable(String databaseName, String tableName, String newDatabaseName, String newTableName);
 
-    void updateTableParameters(String databaseName, String tableName, Function<Map<String, String>, Map<String, String>> update);
-
     void addColumn(String databaseName, String tableName, String columnName, HiveType columnType, String columnComment);
 
     void renameColumn(String databaseName, String tableName, String oldColumnName, String newColumnName);
@@ -72,26 +81,27 @@ public interface ExtendedHiveMetastore
 
     Map<String, Optional<Partition>> getPartitionsByNames(String databaseName, String tableName, List<String> partitionNames);
 
-    /**
-     * Adds partitions to the table in a single atomic task.  The implementation
-     * must either add all partitions and return normally, or add no partitions and
-     * throw an exception.
-     */
-    void addPartitions(String databaseName, String tableName, List<Partition> partitions);
+    void addPartitions(String databaseName, String tableName, List<PartitionWithStatistics> partitions);
 
     void dropPartition(String databaseName, String tableName, List<String> parts, boolean deleteData);
 
-    void alterPartition(String databaseName, String tableName, Partition partition);
+    void alterPartition(String databaseName, String tableName, PartitionWithStatistics partition);
 
-    void updatePartitionParameters(String databaseName, String tableName, List<String> partitionValues, Function<Map<String, String>, Map<String, String>> update);
+    void createRole(String role, String grantor);
 
-    Set<String> getRoles(String user);
+    void dropRole(String role);
 
-    Set<HivePrivilegeInfo> getDatabasePrivileges(String user, String databaseName);
+    Set<String> listRoles();
 
-    Set<HivePrivilegeInfo> getTablePrivileges(String user, String databaseName, String tableName);
+    void grantRoles(Set<String> roles, Set<PrestoPrincipal> grantees, boolean withAdminOption, PrestoPrincipal grantor);
 
-    void grantTablePrivileges(String databaseName, String tableName, String grantee, Set<HivePrivilegeInfo> privileges);
+    void revokeRoles(Set<String> roles, Set<PrestoPrincipal> grantees, boolean adminOptionFor, PrestoPrincipal grantor);
 
-    void revokeTablePrivileges(String databaseName, String tableName, String grantee, Set<HivePrivilegeInfo> privileges);
+    Set<RoleGrant> listRoleGrants(PrestoPrincipal principal);
+
+    void grantTablePrivileges(String databaseName, String tableName, PrestoPrincipal grantee, Set<HivePrivilegeInfo> privileges);
+
+    void revokeTablePrivileges(String databaseName, String tableName, PrestoPrincipal grantee, Set<HivePrivilegeInfo> privileges);
+
+    Set<HivePrivilegeInfo> listTablePrivileges(String databaseName, String tableName, PrestoPrincipal principal);
 }

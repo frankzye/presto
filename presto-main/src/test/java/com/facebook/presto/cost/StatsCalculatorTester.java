@@ -36,7 +36,17 @@ public class StatsCalculatorTester
 
     public StatsCalculatorTester()
     {
-        this(createQueryRunner());
+        this(testSessionBuilder().build());
+    }
+
+    public StatsCalculatorTester(Session session)
+    {
+        this(createQueryRunner(session));
+    }
+
+    public Metadata getMetadata()
+    {
+        return metadata;
     }
 
     private StatsCalculatorTester(LocalQueryRunner queryRunner)
@@ -47,14 +57,12 @@ public class StatsCalculatorTester
         this.queryRunner = queryRunner;
     }
 
-    private static LocalQueryRunner createQueryRunner()
+    private static LocalQueryRunner createQueryRunner(Session session)
     {
-        Session session = testSessionBuilder().build();
-
         LocalQueryRunner queryRunner = new LocalQueryRunner(session);
         queryRunner.createCatalog(session.getCatalog().get(),
                 new TpchConnectorFactory(1),
-                ImmutableMap.<String, String>of());
+                ImmutableMap.of());
         return queryRunner;
     }
 
@@ -62,7 +70,7 @@ public class StatsCalculatorTester
     {
         PlanBuilder planBuilder = new PlanBuilder(new PlanNodeIdAllocator(), metadata);
         PlanNode planNode = planProvider.apply(planBuilder);
-        return new StatsCalculatorAssertion(statsCalculator, session, planNode, planBuilder.getSymbols());
+        return new StatsCalculatorAssertion(statsCalculator, session, planNode, planBuilder.getTypes());
     }
 
     @Override

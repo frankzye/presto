@@ -14,19 +14,19 @@
 package com.facebook.presto.type;
 
 import com.facebook.presto.block.BlockEncodingManager;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.spi.function.OperatorType;
+import com.facebook.presto.metadata.FunctionManager;
+import com.facebook.presto.metadata.OperatorNotFoundException;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
 import com.facebook.presto.spi.type.TypeSignature;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import org.testng.annotations.Test;
 
 import java.util.Optional;
 import java.util.Set;
 
+import static com.facebook.presto.metadata.CastType.CAST;
 import static com.facebook.presto.spi.function.OperatorType.EQUAL;
 import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN;
 import static com.facebook.presto.spi.function.OperatorType.GREATER_THAN_OR_EQUAL;
@@ -53,6 +53,7 @@ import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.type.JoniRegexpType.JONI_REGEXP;
 import static com.facebook.presto.type.JsonPathType.JSON_PATH;
 import static com.facebook.presto.type.LikePatternType.LIKE_PATTERN;
@@ -68,7 +69,7 @@ import static org.testng.Assert.fail;
 public class TestTypeRegistry
 {
     private final TypeManager typeRegistry = new TypeRegistry();
-    private final FunctionRegistry functionRegistry = new FunctionRegistry(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
+    private final FunctionManager functionManager = new FunctionManager(typeRegistry, new BlockEncodingManager(typeRegistry), new FeaturesConfig());
 
     @Test
     public void testNonexistentType()
@@ -186,13 +187,13 @@ public class TestTypeRegistry
         assertThat("smallint", "decimal(9,0)").hasCommonSuperType("decimal(9,0)").canCoerceFirstToSecondOnly();
         assertThat("smallint", "decimal(2,1)").hasCommonSuperType("decimal(6,1)").cannotCoerceToEachOther();
 
-        assertThat("char(42)", "char(40)").isIncompatible();
-        assertThat("char(42)", "char(44)").isIncompatible();
+        assertThat("char(42)", "char(40)").hasCommonSuperType("char(42)").canCoerceSecondToFirstOnly();
+        assertThat("char(42)", "char(44)").hasCommonSuperType("char(44)").canCoerceFirstToSecondOnly();
         assertThat("varchar(42)", "varchar(42)").hasCommonSuperType("varchar(42)").canCoerceToEachOther();
         assertThat("varchar(42)", "varchar(44)").hasCommonSuperType("varchar(44)").canCoerceFirstToSecondOnly();
-        assertThat("char(42)", "varchar(40)").hasCommonSuperType("varchar(42)").cannotCoerceToEachOther();
-        assertThat("char(42)", "varchar(42)").hasCommonSuperType("varchar(42)").canCoerceFirstToSecondOnly();
-        assertThat("char(42)", "varchar(44)").hasCommonSuperType("varchar(44)").canCoerceFirstToSecondOnly();
+        assertThat("char(40)", "varchar(42)").hasCommonSuperType("char(42)").cannotCoerceToEachOther();
+        assertThat("char(42)", "varchar(42)").hasCommonSuperType("char(42)").canCoerceSecondToFirstOnly();
+        assertThat("char(44)", "varchar(42)").hasCommonSuperType("char(44)").canCoerceSecondToFirstOnly();
 
         assertThat(createType("char(42)"), JONI_REGEXP).hasCommonSuperType(JONI_REGEXP).canCoerceFirstToSecondOnly();
         assertThat(createType("char(42)"), JSON_PATH).hasCommonSuperType(JSON_PATH).canCoerceFirstToSecondOnly();
@@ -251,8 +252,12 @@ public class TestTypeRegistry
         for (Type sourceType : types) {
             for (Type resultType : types) {
                 if (typeRegistry.canCoerce(sourceType, resultType) && sourceType != UNKNOWN && resultType != UNKNOWN) {
-                    assertTrue(functionRegistry.canResolveOperator(OperatorType.CAST, resultType, ImmutableList.of(sourceType)),
-                            format("'%s' -> '%s' coercion exists but there is no cast operator", sourceType, resultType));
+                    try {
+                        functionManager.lookupCast(CAST, sourceType.getTypeSignature(), resultType.getTypeSignature());
+                    }
+                    catch (OperatorNotFoundException e) {
+                        fail(format("'%s' -> '%s' coercion exists but there is no cast operator", sourceType, resultType));
+                    }
                 }
             }
         }
@@ -263,16 +268,16 @@ public class TestTypeRegistry
     {
         for (Type type : typeRegistry.getTypes()) {
             if (type.isComparable()) {
-                functionRegistry.resolveOperator(EQUAL, ImmutableList.of(type, type));
-                functionRegistry.resolveOperator(NOT_EQUAL, ImmutableList.of(type, type));
-                functionRegistry.resolveOperator(IS_DISTINCT_FROM, ImmutableList.of(type, type));
-                functionRegistry.resolveOperator(HASH_CODE, ImmutableList.of(type));
+                functionManager.resolveOperator(EQUAL, fromTypes(type, type));
+                functionManager.resolveOperator(NOT_EQUAL, fromTypes(type, type));
+                functionManager.resolveOperator(IS_DISTINCT_FROM, fromTypes(type, type));
+                functionManager.resolveOperator(HASH_CODE, fromTypes(type));
             }
             if (type.isOrderable()) {
-                functionRegistry.resolveOperator(LESS_THAN, ImmutableList.of(type, type));
-                functionRegistry.resolveOperator(LESS_THAN_OR_EQUAL, ImmutableList.of(type, type));
-                functionRegistry.resolveOperator(GREATER_THAN_OR_EQUAL, ImmutableList.of(type, type));
-                functionRegistry.resolveOperator(GREATER_THAN, ImmutableList.of(type, type));
+                functionManager.resolveOperator(LESS_THAN, fromTypes(type, type));
+                functionManager.resolveOperator(LESS_THAN_OR_EQUAL, fromTypes(type, type));
+                functionManager.resolveOperator(GREATER_THAN_OR_EQUAL, fromTypes(type, type));
+                functionManager.resolveOperator(GREATER_THAN, fromTypes(type, type));
             }
         }
     }

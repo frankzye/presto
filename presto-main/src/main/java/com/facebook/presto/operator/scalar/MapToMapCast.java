@@ -15,7 +15,8 @@ package com.facebook.presto.operator.scalar;
 
 import com.facebook.presto.annotation.UsedByGeneratedCode;
 import com.facebook.presto.metadata.BoundVariables;
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.CastType;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.metadata.SqlOperator;
 import com.facebook.presto.operator.aggregation.TypedSet;
 import com.facebook.presto.spi.ConnectorSession;
@@ -31,7 +32,6 @@ import io.airlift.slice.Slice;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 
-import static com.facebook.presto.metadata.Signature.typeVariable;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
 import static com.facebook.presto.operator.scalar.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
@@ -39,6 +39,7 @@ import static com.facebook.presto.spi.block.MethodHandleUtil.compose;
 import static com.facebook.presto.spi.block.MethodHandleUtil.nativeValueGetter;
 import static com.facebook.presto.spi.block.MethodHandleUtil.nativeValueWriter;
 import static com.facebook.presto.spi.function.OperatorType.CAST;
+import static com.facebook.presto.spi.function.Signature.typeVariable;
 import static com.facebook.presto.spi.type.TypeSignature.parseTypeSignature;
 import static com.facebook.presto.util.Failures.internalError;
 import static com.facebook.presto.util.Reflection.methodHandle;
@@ -78,7 +79,7 @@ public final class MapToMapCast
     }
 
     @Override
-    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionRegistry functionRegistry)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, TypeManager typeManager, FunctionManager functionManager)
     {
         checkArgument(arity == 1, "Expected arity to be 1");
         Type fromKeyType = boundVariables.getTypeVariable("FK");
@@ -91,8 +92,8 @@ public final class MapToMapCast
                         TypeSignatureParameter.of(toKeyType.getTypeSignature()),
                         TypeSignatureParameter.of(toValueType.getTypeSignature())));
 
-        MethodHandle keyProcessor = buildProcessor(functionRegistry, fromKeyType, toKeyType, true);
-        MethodHandle valueProcessor = buildProcessor(functionRegistry, fromValueType, toValueType, false);
+        MethodHandle keyProcessor = buildProcessor(functionManager, fromKeyType, toKeyType, true);
+        MethodHandle valueProcessor = buildProcessor(functionManager, fromValueType, toValueType, false);
         MethodHandle target = MethodHandles.insertArguments(METHOD_HANDLE, 0, keyProcessor, valueProcessor, toMapType);
         return new ScalarFunctionImplementation(true, ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)), target, true);
     }
@@ -101,12 +102,12 @@ public final class MapToMapCast
      * The signature of the returned MethodHandle is (Block fromMap, int position, ConnectorSession session, BlockBuilder mapBlockBuilder)void.
      * The processor will get the value from fromMap, cast it and write to toBlock.
      */
-    private MethodHandle buildProcessor(FunctionRegistry functionRegistry, Type fromType, Type toType, boolean isKey)
+    private MethodHandle buildProcessor(FunctionManager functionManager, Type fromType, Type toType, boolean isKey)
     {
         MethodHandle getter = nativeValueGetter(fromType);
 
         // Adapt cast that takes ([ConnectorSession,] ?) to one that takes (?, ConnectorSession), where ? is the return type of getter.
-        ScalarFunctionImplementation castImplementation = functionRegistry.getScalarFunctionImplementation(functionRegistry.getCoercion(fromType, toType));
+        ScalarFunctionImplementation castImplementation = functionManager.getScalarFunctionImplementation(functionManager.lookupCast(CastType.CAST, fromType.getTypeSignature(), toType.getTypeSignature()));
         MethodHandle cast = castImplementation.getMethodHandle();
         if (cast.type().parameterArray()[0] != ConnectorSession.class) {
             cast = MethodHandles.dropArguments(cast, 0, ConnectorSession.class);

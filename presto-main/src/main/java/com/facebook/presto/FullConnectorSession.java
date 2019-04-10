@@ -17,7 +17,7 @@ import com.facebook.presto.connector.ConnectorId;
 import com.facebook.presto.metadata.SessionPropertyManager;
 import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.PrestoException;
-import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.ConnectorIdentity;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.google.common.collect.ImmutableMap;
 
@@ -34,38 +34,39 @@ public class FullConnectorSession
         implements ConnectorSession
 {
     private final Session session;
+    private final ConnectorIdentity identity;
     private final Map<String, String> properties;
     private final ConnectorId connectorId;
     private final String catalog;
     private final SessionPropertyManager sessionPropertyManager;
     private final boolean isLegacyTimestamp;
-    private final boolean isLegacyRoundNBigint;
 
-    public FullConnectorSession(Session session)
+    public FullConnectorSession(Session session, ConnectorIdentity identity)
     {
         this.session = requireNonNull(session, "session is null");
+        this.identity = requireNonNull(identity, "identity is null");
         this.properties = null;
         this.connectorId = null;
         this.catalog = null;
         this.sessionPropertyManager = null;
         this.isLegacyTimestamp = SystemSessionProperties.isLegacyTimestamp(session);
-        this.isLegacyRoundNBigint = SystemSessionProperties.isLegacyRoundNBigint(session);
     }
 
     public FullConnectorSession(
             Session session,
+            ConnectorIdentity identity,
             Map<String, String> properties,
             ConnectorId connectorId,
             String catalog,
             SessionPropertyManager sessionPropertyManager)
     {
         this.session = requireNonNull(session, "session is null");
+        this.identity = requireNonNull(identity, "identity is null");
         this.properties = ImmutableMap.copyOf(requireNonNull(properties, "properties is null"));
         this.connectorId = requireNonNull(connectorId, "connectorId is null");
         this.catalog = requireNonNull(catalog, "catalog is null");
         this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
         this.isLegacyTimestamp = SystemSessionProperties.isLegacyTimestamp(session);
-        this.isLegacyRoundNBigint = SystemSessionProperties.isLegacyRoundNBigint(session);
     }
 
     public Session getSession()
@@ -86,9 +87,9 @@ public class FullConnectorSession
     }
 
     @Override
-    public Identity getIdentity()
+    public ConnectorIdentity getIdentity()
     {
-        return session.getIdentity();
+        return identity;
     }
 
     @Override
@@ -119,12 +120,6 @@ public class FullConnectorSession
     public boolean isLegacyTimestamp()
     {
         return isLegacyTimestamp;
-    }
-
-    @Override
-    public boolean isLegacyRoundNBigint()
-    {
-        return isLegacyRoundNBigint;
     }
 
     @Override

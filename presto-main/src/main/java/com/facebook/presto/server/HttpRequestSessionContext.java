@@ -15,6 +15,7 @@ package com.facebook.presto.server;
 
 import com.facebook.presto.Session.ResourceEstimateBuilder;
 import com.facebook.presto.spi.security.Identity;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.session.ResourceEstimates;
 import com.facebook.presto.sql.parser.ParsingException;
 import com.facebook.presto.sql.parser.ParsingOptions;
@@ -45,11 +46,14 @@ import java.util.Optional;
 import java.util.Set;
 
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CATALOG;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLIENT_CAPABILITIES;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLIENT_INFO;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_CLIENT_TAGS;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_LANGUAGE;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_PATH;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_PREPARED_STATEMENT;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_RESOURCE_ESTIMATE;
+import static com.facebook.presto.client.PrestoHeaders.PRESTO_ROLE;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SCHEMA;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SESSION;
 import static com.facebook.presto.client.PrestoHeaders.PRESTO_SOURCE;
@@ -72,6 +76,7 @@ public final class HttpRequestSessionContext
 
     private final String catalog;
     private final String schema;
+    private final String path;
 
     private final Identity identity;
 
@@ -82,6 +87,7 @@ public final class HttpRequestSessionContext
     private final String timeZoneId;
     private final String language;
     private final Set<String> clientTags;
+    private final Set<String> clientCapabilities;
     private final ResourceEstimates resourceEstimates;
 
     private final Map<String, String> systemProperties;
@@ -98,11 +104,12 @@ public final class HttpRequestSessionContext
     {
         catalog = trimEmptyToNull(servletRequest.getHeader(PRESTO_CATALOG));
         schema = trimEmptyToNull(servletRequest.getHeader(PRESTO_SCHEMA));
+        path = trimEmptyToNull(servletRequest.getHeader(PRESTO_PATH));
         assertRequest((catalog != null) || (schema == null), "Schema is set but catalog is not");
 
         String user = trimEmptyToNull(servletRequest.getHeader(PRESTO_USER));
         assertRequest(user != null, "User must be set");
-        identity = new Identity(user, Optional.ofNullable(servletRequest.getUserPrincipal()));
+        identity = new Identity(user, Optional.ofNullable(servletRequest.getUserPrincipal()), parseRoleHeaders(servletRequest));
 
         source = servletRequest.getHeader(PRESTO_SOURCE);
         traceToken = Optional.ofNullable(trimEmptyToNull(servletRequest.getHeader(PRESTO_TRACE_TOKEN)));
@@ -112,6 +119,7 @@ public final class HttpRequestSessionContext
         language = servletRequest.getHeader(PRESTO_LANGUAGE);
         clientInfo = servletRequest.getHeader(PRESTO_CLIENT_INFO);
         clientTags = parseClientTags(servletRequest);
+        clientCapabilities = parseClientCapabilities(servletRequest);
         resourceEstimates = parseResourceEstimate(servletRequest);
 
         // parse session properties
@@ -173,6 +181,12 @@ public final class HttpRequestSessionContext
     }
 
     @Override
+    public String getPath()
+    {
+        return path;
+    }
+
+    @Override
     public String getSource()
     {
         return source;
@@ -200,6 +214,12 @@ public final class HttpRequestSessionContext
     public Set<String> getClientTags()
     {
         return clientTags;
+    }
+
+    @Override
+    public Set<String> getClientCapabilities()
+    {
+        return clientCapabilities;
     }
 
     @Override
@@ -276,10 +296,27 @@ public final class HttpRequestSessionContext
         return sessionProperties;
     }
 
+    private static Map<String, SelectedRole> parseRoleHeaders(HttpServletRequest servletRequest)
+    {
+        ImmutableMap.Builder<String, SelectedRole> roles = ImmutableMap.builder();
+        for (String header : splitSessionHeader(servletRequest.getHeaders(PRESTO_ROLE))) {
+            List<String> nameValue = Splitter.on('=').limit(2).trimResults().splitToList(header);
+            assertRequest(nameValue.size() == 2, "Invalid %s header", PRESTO_ROLE);
+            roles.put(nameValue.get(0), SelectedRole.valueOf(urlDecode(nameValue.get(1))));
+        }
+        return roles.build();
+    }
+
     private Set<String> parseClientTags(HttpServletRequest servletRequest)
     {
         Splitter splitter = Splitter.on(',').trimResults().omitEmptyStrings();
         return ImmutableSet.copyOf(splitter.split(nullToEmpty(servletRequest.getHeader(PRESTO_CLIENT_TAGS))));
+    }
+
+    private Set<String> parseClientCapabilities(HttpServletRequest servletRequest)
+    {
+        Splitter splitter = Splitter.on(',').trimResults().omitEmptyStrings();
+        return ImmutableSet.copyOf(splitter.split(nullToEmpty(servletRequest.getHeader(PRESTO_CLIENT_CAPABILITIES))));
     }
 
     private ResourceEstimates parseResourceEstimate(HttpServletRequest servletRequest)

@@ -52,13 +52,13 @@ import static com.facebook.presto.metadata.MetadataUtil.SchemaMetadataBuilder.sc
 import static com.facebook.presto.metadata.MetadataUtil.TableMetadataBuilder.tableMetadataBuilder;
 import static com.facebook.presto.metadata.MetadataUtil.findColumnMetadata;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
-import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
 import static com.facebook.presto.spi.type.VarcharType.createUnboundedVarcharType;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Predicates.compose;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.airlift.slice.Slices.utf8Slice;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Function.identity;
 import static java.util.stream.Collectors.toMap;
@@ -73,6 +73,9 @@ public class InformationSchemaMetadata
     public static final SchemaTableName TABLE_VIEWS = new SchemaTableName(INFORMATION_SCHEMA, "views");
     public static final SchemaTableName TABLE_SCHEMATA = new SchemaTableName(INFORMATION_SCHEMA, "schemata");
     public static final SchemaTableName TABLE_TABLE_PRIVILEGES = new SchemaTableName(INFORMATION_SCHEMA, "table_privileges");
+    public static final SchemaTableName TABLE_ROLES = new SchemaTableName(INFORMATION_SCHEMA, "roles");
+    public static final SchemaTableName TABLE_APPLICABLE_ROLES = new SchemaTableName(INFORMATION_SCHEMA, "applicable_roles");
+    public static final SchemaTableName TABLE_ENABLED_ROLES = new SchemaTableName(INFORMATION_SCHEMA, "enabled_roles");
 
     public static final Map<SchemaTableName, ConnectorTableMetadata> TABLES = schemaMetadataBuilder()
             .table(tableMetadataBuilder(TABLE_COLUMNS)
@@ -97,6 +100,7 @@ public class InformationSchemaMetadata
                     .column("table_catalog", createUnboundedVarcharType())
                     .column("table_schema", createUnboundedVarcharType())
                     .column("table_name", createUnboundedVarcharType())
+                    .column("view_owner", createUnboundedVarcharType())
                     .column("view_definition", createUnboundedVarcharType())
                     .build())
             .table(tableMetadataBuilder(TABLE_SCHEMATA)
@@ -105,13 +109,27 @@ public class InformationSchemaMetadata
                     .build())
             .table(tableMetadataBuilder(TABLE_TABLE_PRIVILEGES)
                     .column("grantor", createUnboundedVarcharType())
+                    .column("grantor_type", createUnboundedVarcharType())
                     .column("grantee", createUnboundedVarcharType())
+                    .column("grantee_type", createUnboundedVarcharType())
                     .column("table_catalog", createUnboundedVarcharType())
                     .column("table_schema", createUnboundedVarcharType())
                     .column("table_name", createUnboundedVarcharType())
                     .column("privilege_type", createUnboundedVarcharType())
-                    .column("is_grantable", BOOLEAN)
-                    .column("with_hierarchy", BOOLEAN)
+                    .column("is_grantable", createUnboundedVarcharType())
+                    .column("with_hierarchy", createUnboundedVarcharType())
+                    .build())
+            .table(tableMetadataBuilder(TABLE_ROLES)
+                    .column("role_name", createUnboundedVarcharType())
+                    .build())
+            .table(tableMetadataBuilder(TABLE_APPLICABLE_ROLES)
+                    .column("grantee", createUnboundedVarcharType())
+                    .column("grantee_type", createUnboundedVarcharType())
+                    .column("role_name", createUnboundedVarcharType())
+                    .column("is_grantable", createUnboundedVarcharType())
+                    .build())
+            .table(tableMetadataBuilder(TABLE_ENABLED_ROLES)
+                    .column("role_name", createUnboundedVarcharType())
                     .build())
             .build();
 
@@ -238,24 +256,25 @@ public class InformationSchemaMetadata
 
     private boolean isTablesEnumeratingTable(SchemaTableName schemaTableName)
     {
-        return ImmutableSet.of(TABLE_COLUMNS, TABLE_TABLES, TABLE_TABLES, TABLE_TABLE_PRIVILEGES).contains(schemaTableName);
+        return ImmutableSet.of(TABLE_COLUMNS, TABLE_VIEWS, TABLE_TABLES, TABLE_TABLES, TABLE_TABLE_PRIVILEGES).contains(schemaTableName);
     }
 
     private Set<QualifiedTablePrefix> calculatePrefixesWithSchemaName(
             ConnectorSession connectorSession,
             TupleDomain<ColumnHandle> constraint,
-            Predicate<Map<ColumnHandle, NullableValue>> predicate)
+            Optional<Predicate<Map<ColumnHandle, NullableValue>>> predicate)
     {
         Optional<Set<String>> schemas = filterString(constraint, SCHEMA_COLUMN_HANDLE);
         if (schemas.isPresent()) {
             return schemas.get().stream()
+                    .filter(this::isLowerCase)
                     .map(schema -> new QualifiedTablePrefix(catalogName, schema))
                     .collect(toImmutableSet());
         }
 
         Session session = ((FullConnectorSession) connectorSession).getSession();
         return metadata.listSchemaNames(session, catalogName).stream()
-                .filter(schema -> predicate.test(schemaAsFixedValues(schema)))
+                .filter(schema -> !predicate.isPresent() || predicate.get().test(schemaAsFixedValues(schema)))
                 .map(schema -> new QualifiedTablePrefix(catalogName, schema))
                 .collect(toImmutableSet());
     }
@@ -264,7 +283,7 @@ public class InformationSchemaMetadata
             ConnectorSession connectorSession,
             Set<QualifiedTablePrefix> prefixes,
             TupleDomain<ColumnHandle> constraint,
-            Predicate<Map<ColumnHandle, NullableValue>> predicate)
+            Optional<Predicate<Map<ColumnHandle, NullableValue>>> predicate)
     {
         Session session = ((FullConnectorSession) connectorSession).getSession();
 
@@ -272,6 +291,8 @@ public class InformationSchemaMetadata
         if (tables.isPresent()) {
             return prefixes.stream()
                     .flatMap(prefix -> tables.get().stream()
+                            .filter(this::isLowerCase)
+                            .map(table -> table.toLowerCase(ENGLISH))
                             .map(table -> new QualifiedObjectName(catalogName, prefix.getSchemaName().get(), table)))
                     .filter(objectName -> metadata.getTableHandle(session, objectName).isPresent() || metadata.getView(session, objectName).isPresent())
                     .map(QualifiedObjectName::asQualifiedTablePrefix)
@@ -282,7 +303,7 @@ public class InformationSchemaMetadata
                 .flatMap(prefix -> Stream.concat(
                         metadata.listTables(session, prefix).stream(),
                         metadata.listViews(session, prefix).stream()))
-                .filter(objectName -> predicate.test(asFixedValues(objectName)))
+                .filter(objectName -> !predicate.isPresent() || predicate.get().test(asFixedValues(objectName)))
                 .map(QualifiedObjectName::asQualifiedTablePrefix)
                 .collect(toImmutableSet());
     }
@@ -334,5 +355,10 @@ public class InformationSchemaMetadata
     {
         checkArgument(TABLES.containsKey(tableName), "table does not exist: %s", tableName);
         return TABLES.get(tableName).getColumns();
+    }
+
+    private boolean isLowerCase(String value)
+    {
+        return value.toLowerCase(ENGLISH).equals(value);
     }
 }

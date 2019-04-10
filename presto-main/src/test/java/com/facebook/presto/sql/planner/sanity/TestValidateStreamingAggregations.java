@@ -14,14 +14,14 @@
 package com.facebook.presto.sql.planner.sanity;
 
 import com.facebook.presto.connector.ConnectorId;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.TableHandle;
 import com.facebook.presto.metadata.TableLayoutHandle;
 import com.facebook.presto.spi.predicate.TupleDomain;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.parser.SqlParser;
 import com.facebook.presto.sql.planner.PlanNodeIdAllocator;
-import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.assertions.BasePlanTest;
 import com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder;
 import com.facebook.presto.sql.planner.plan.PlanNode;
@@ -34,7 +34,6 @@ import com.google.common.collect.ImmutableMap;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
-import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -59,7 +58,7 @@ public class TestValidateStreamingAggregations
         ConnectorId connectorId = getCurrentConnectorId();
         nationTableHandle = new TableHandle(
                 connectorId,
-                new TpchTableHandle(connectorId.toString(), "nation", 1.0));
+                new TpchTableHandle("nation", 1.0));
 
         nationTableLayoutHandle = new TableLayoutHandle(connectorId,
                 TestingTransactionHandle.create(),
@@ -72,7 +71,7 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .addGroupingSet(p.symbol("nationkey"))
+                                .singleGroupingSet(p.symbol("nationkey"))
                                 .source(
                                         p.tableScan(
                                                 nationTableHandle,
@@ -83,7 +82,7 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .addGroupingSet(p.symbol("unique"), p.symbol("nationkey"))
+                                .singleGroupingSet(p.symbol("unique"), p.symbol("nationkey"))
                                 .preGroupedSymbols(p.symbol("unique"), p.symbol("nationkey"))
                                 .source(
                                         p.assignUniqueId(p.symbol("unique"),
@@ -100,7 +99,7 @@ public class TestValidateStreamingAggregations
         validatePlan(
                 p -> p.aggregation(
                         a -> a.step(SINGLE)
-                                .addGroupingSet(p.symbol("nationkey"))
+                                .singleGroupingSet(p.symbol("nationkey"))
                                 .preGroupedSymbols(p.symbol("nationkey"))
                                 .source(
                                         p.tableScan(
@@ -114,12 +113,12 @@ public class TestValidateStreamingAggregations
     {
         PlanBuilder builder = new PlanBuilder(idAllocator, metadata);
         PlanNode planNode = planProvider.apply(builder);
-        Map<Symbol, Type> types = builder.getSymbols();
+        TypeProvider types = builder.getTypes();
 
         getQueryRunner().inTransaction(session -> {
             // metadata.getCatalogHandle() registers the catalog for the transaction
             session.getCatalog().ifPresent(catalog -> metadata.getCatalogHandle(session, catalog));
-            new ValidateStreamingAggregations().validate(planNode, session, metadata, sqlParser, types);
+            new ValidateStreamingAggregations().validate(planNode, session, metadata, sqlParser, types, WarningCollector.NOOP);
             return null;
         });
     }

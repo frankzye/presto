@@ -178,7 +178,6 @@ public class HiveSplitManager
             return new FixedSplitSource(ImmutableList.of());
         }
 
-        // get buckets from first partition (arbitrary)
         Optional<HiveBucketFilter> bucketFilter = layout.getBucketFilter();
 
         // validate bucket bucketed execution
@@ -187,10 +186,18 @@ public class HiveSplitManager
             throw new PrestoException(GENERIC_INTERNAL_ERROR, "SchedulingPolicy is bucketed, but BucketHandle is not present");
         }
 
+        if (bucketHandle.isPresent()) {
+            if (bucketHandle.get().getReadBucketCount() > bucketHandle.get().getTableBucketCount()) {
+                throw new PrestoException(
+                        GENERIC_INTERNAL_ERROR,
+                        "readBucketCount (%s) is greater than the tableBucketCount (%s) which generally points to an issue in plan generation");
+            }
+        }
+
         // sort partitions
         partitions = Ordering.natural().onResultOf(HivePartition::getPartitionId).reverse().sortedCopy(partitions);
 
-        Iterable<HivePartitionMetadata> hivePartitions = getPartitionMetadata(metastore, table, tableName, partitions, bucketHandle.map(HiveBucketHandle::toBucketProperty));
+        Iterable<HivePartitionMetadata> hivePartitions = getPartitionMetadata(metastore, table, tableName, partitions, bucketHandle.map(HiveBucketHandle::toTableBucketProperty), session);
 
         HiveSplitLoader hiveSplitLoader = new BackgroundHiveSplitLoader(
                 table,
@@ -248,7 +255,7 @@ public class HiveSplitManager
         return highMemorySplitSourceCounter;
     }
 
-    private Iterable<HivePartitionMetadata> getPartitionMetadata(SemiTransactionalHiveMetastore metastore, Table table, SchemaTableName tableName, List<HivePartition> hivePartitions, Optional<HiveBucketProperty> bucketProperty)
+    private Iterable<HivePartitionMetadata> getPartitionMetadata(SemiTransactionalHiveMetastore metastore, Table table, SchemaTableName tableName, List<HivePartition> hivePartitions, Optional<HiveBucketProperty> bucketProperty, ConnectorSession session)
     {
         if (hivePartitions.isEmpty()) {
             return ImmutableList.of();
@@ -360,7 +367,7 @@ public class HiveSplitManager
         return concat(partitionBatches);
     }
 
-    private static boolean isBucketCountCompatible(int tableBucketCount, int partitionBucketCount)
+    static boolean isBucketCountCompatible(int tableBucketCount, int partitionBucketCount)
     {
         checkArgument(tableBucketCount > 0 && partitionBucketCount > 0);
         int larger = Math.max(tableBucketCount, partitionBucketCount);

@@ -26,12 +26,12 @@ import com.facebook.presto.sql.planner.plan.PlanVisitor;
 import com.facebook.presto.sql.planner.plan.ProjectNode;
 import com.facebook.presto.sql.planner.plan.SemiJoinNode;
 import com.facebook.presto.sql.planner.plan.SortNode;
+import com.facebook.presto.sql.planner.plan.SpatialJoinNode;
 import com.facebook.presto.sql.planner.plan.TableScanNode;
 import com.facebook.presto.sql.planner.plan.TopNNode;
 import com.facebook.presto.sql.planner.plan.UnionNode;
 import com.facebook.presto.sql.planner.plan.WindowNode;
 import com.facebook.presto.sql.tree.ComparisonExpression;
-import com.facebook.presto.sql.tree.ComparisonExpressionType;
 import com.facebook.presto.sql.tree.Expression;
 import com.facebook.presto.sql.tree.SymbolReference;
 import com.google.common.collect.ImmutableBiMap;
@@ -75,7 +75,7 @@ public class EffectivePredicateExtractor
                 Expression expression = entry.getValue();
                 // TODO: this is not correct with respect to NULLs ('reference IS NULL' would be correct, rather than 'reference = NULL')
                 // TODO: switch this to 'IS NOT DISTINCT FROM' syntax when EqualityInference properly supports it
-                return new ComparisonExpression(ComparisonExpressionType.EQUAL, reference, expression);
+                return new ComparisonExpression(ComparisonExpression.Operator.EQUAL, reference, expression);
             };
 
     private final DomainTranslator domainTranslator;
@@ -231,11 +231,12 @@ public class EffectivePredicateExtractor
 
             switch (node.getType()) {
                 case INNER:
-                    return combineConjuncts(ImmutableList.<Expression>builder()
-                            .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
-                            .add(pullExpressionThroughSymbols(rightPredicate, node.getOutputSymbols()))
-                            .addAll(pullExpressionsThroughSymbols(joinConjuncts, node.getOutputSymbols()))
-                            .build());
+                    return pullExpressionThroughSymbols(combineConjuncts(ImmutableList.<Expression>builder()
+                            .add(leftPredicate)
+                            .add(rightPredicate)
+                            .add(combineConjuncts(joinConjuncts))
+                            .add(node.getFilter().orElse(TRUE_LITERAL))
+                            .build()), node.getOutputSymbols());
                 case LEFT:
                     return combineConjuncts(ImmutableList.<Expression>builder()
                             .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
@@ -274,6 +275,28 @@ public class EffectivePredicateExtractor
         {
             // Filtering source does not change the effective predicate over the output symbols
             return node.getSource().accept(this, context);
+        }
+
+        @Override
+        public Expression visitSpatialJoin(SpatialJoinNode node, Void context)
+        {
+            Expression leftPredicate = node.getLeft().accept(this, context);
+            Expression rightPredicate = node.getRight().accept(this, context);
+
+            switch (node.getType()) {
+                case INNER:
+                    return combineConjuncts(ImmutableList.<Expression>builder()
+                            .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
+                            .add(pullExpressionThroughSymbols(rightPredicate, node.getOutputSymbols()))
+                            .build());
+                case LEFT:
+                    return combineConjuncts(ImmutableList.<Expression>builder()
+                            .add(pullExpressionThroughSymbols(leftPredicate, node.getOutputSymbols()))
+                            .addAll(pullNullableConjunctsThroughOuterJoin(extractConjuncts(rightPredicate), node.getOutputSymbols(), node.getRight().getOutputSymbols()::contains))
+                            .build());
+                default:
+                    throw new IllegalArgumentException("Unsupported spatial join type: " + node.getType());
+            }
         }
 
         private Expression deriveCommonPredicates(PlanNode node, Function<Integer, Collection<Map.Entry<Symbol, SymbolReference>>> mapping)

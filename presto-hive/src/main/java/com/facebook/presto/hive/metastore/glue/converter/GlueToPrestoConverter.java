@@ -20,21 +20,24 @@ import com.facebook.presto.hive.HiveType;
 import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.Database;
 import com.facebook.presto.hive.metastore.Partition;
-import com.facebook.presto.hive.metastore.PrincipalType;
+import com.facebook.presto.hive.metastore.PrestoTableType;
 import com.facebook.presto.hive.metastore.SortingColumn;
 import com.facebook.presto.hive.metastore.SortingColumn.Order;
 import com.facebook.presto.hive.metastore.Storage;
 import com.facebook.presto.hive.metastore.StorageFormat;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.spi.PrestoException;
+import com.facebook.presto.spi.security.PrincipalType;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
+import static com.facebook.presto.hive.metastore.PrestoTableType.OTHER;
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -68,7 +71,7 @@ public final class GlueToPrestoConverter
                 .setDatabaseName(dbName)
                 .setTableName(glueTable.getName())
                 .setOwner(nullToEmpty(glueTable.getOwner()))
-                .setTableType(glueTable.getTableType())
+                .setTableType(PrestoTableType.optionalValueOf(glueTable.getTableType()).orElse(OTHER))
                 .setDataColumns(sd.getColumns().stream()
                         .map(GlueToPrestoConverter::convertColumn)
                         .collect(toList()))
@@ -120,7 +123,7 @@ public final class GlueToPrestoConverter
 
     private static Column convertColumn(com.amazonaws.services.glue.model.Column glueColumn)
     {
-        return new Column(glueColumn.getName(), HiveType.valueOf(glueColumn.getType().toLowerCase()), Optional.ofNullable(glueColumn.getComment()));
+        return new Column(glueColumn.getName(), HiveType.valueOf(glueColumn.getType().toLowerCase(Locale.ENGLISH)), Optional.ofNullable(glueColumn.getComment()));
     }
 
     public static Partition convertPartition(com.amazonaws.services.glue.model.Partition gluePartition)

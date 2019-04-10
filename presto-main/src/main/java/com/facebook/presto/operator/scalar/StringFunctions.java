@@ -326,7 +326,6 @@ public final class StringFunctions
     {
         checkCondition(limit > 0, INVALID_FUNCTION_ARGUMENT, "Limit must be positive");
         checkCondition(limit <= Integer.MAX_VALUE, INVALID_FUNCTION_ARGUMENT, "Limit is too large");
-        checkCondition(delimiter.length() > 0, INVALID_FUNCTION_ARGUMENT, "The delimiter may not be the empty string");
         BlockBuilder parts = VARCHAR.createBlockBuilder(null, 1, string.length());
         // If limit is one, the last and only element is the complete string
         if (limit == 1) {
@@ -340,6 +339,10 @@ public final class StringFunctions
             // Found split?
             if (splitIndex < 0) {
                 break;
+            }
+            if (delimiter.length() == 0) {
+                // For zero-length delimiter, create 1-length splits.
+                splitIndex++;
             }
             // Add the part from current index to found split
             VARCHAR.writeSlice(parts, string, index, splitIndex - index);
@@ -813,5 +816,28 @@ public final class StringFunctions
     public static Slice toUtf8(@SqlType("varchar(x)") Slice slice)
     {
         return slice;
+    }
+
+    // TODO: implement N arguments char concat
+    @Description("concatenates given character strings")
+    @ScalarFunction
+    @LiteralParameters({"x", "y", "u"})
+    @Constraint(variable = "u", expression = "x + y")
+    @SqlType("char(u)")
+    public static Slice concat(@LiteralParameter("x") Long x, @SqlType("char(x)") Slice left, @SqlType("char(y)") Slice right)
+    {
+        int rightLength = right.length();
+        if (rightLength == 0) {
+            return left;
+        }
+
+        Slice paddedLeft = padSpaces(left, x.intValue());
+        int leftLength = paddedLeft.length();
+
+        Slice result = Slices.allocate(leftLength + rightLength);
+        result.setBytes(0, paddedLeft);
+        result.setBytes(leftLength, right);
+
+        return result;
     }
 }

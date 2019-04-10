@@ -22,16 +22,15 @@ import com.facebook.presto.spi.type.SmallintType;
 import com.facebook.presto.spi.type.TinyintType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.google.common.collect.ImmutableSet;
 
 import java.util.Collection;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Predicate;
 
-import static com.facebook.presto.cost.SymbolStatsEstimate.UNKNOWN_STATS;
-import static com.facebook.presto.cost.SymbolStatsEstimate.ZERO_STATS;
+import static com.google.common.base.Preconditions.checkArgument;
 import static java.lang.Double.NaN;
 import static java.lang.Double.isNaN;
 import static java.lang.Math.floor;
@@ -43,18 +42,22 @@ import static java.util.Objects.requireNonNull;
  */
 public class StatsNormalizer
 {
-    public PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, Map<Symbol, Type> types)
+    public PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, TypeProvider types)
     {
         return normalize(stats, Optional.empty(), types);
     }
 
-    public PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, Collection<Symbol> outputSymbols, Map<Symbol, Type> types)
+    public PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, Collection<Symbol> outputSymbols, TypeProvider types)
     {
         return normalize(stats, Optional.of(outputSymbols), types);
     }
 
-    private PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, Optional<Collection<Symbol>> outputSymbols, Map<Symbol, Type> types)
+    private PlanNodeStatsEstimate normalize(PlanNodeStatsEstimate stats, Optional<Collection<Symbol>> outputSymbols, TypeProvider types)
     {
+        if (stats.isOutputRowCountUnknown()) {
+            return PlanNodeStatsEstimate.unknown();
+        }
+
         PlanNodeStatsEstimate.Builder normalized = PlanNodeStatsEstimate.buildFrom(stats);
 
         Predicate<Symbol> symbolFilter = outputSymbols
@@ -69,8 +72,8 @@ public class StatsNormalizer
             }
 
             SymbolStatsEstimate symbolStats = stats.getSymbolStatistics(symbol);
-            SymbolStatsEstimate normalizedSymbolStats = normalizeSymbolStats(symbol, symbolStats, stats, types);
-            if (UNKNOWN_STATS.equals(normalizedSymbolStats)) {
+            SymbolStatsEstimate normalizedSymbolStats = stats.getOutputRowCount() == 0 ? SymbolStatsEstimate.zero() : normalizeSymbolStats(symbol, symbolStats, stats, types);
+            if (normalizedSymbolStats.isUnknown()) {
                 normalized.removeSymbolStatistics(symbol);
                 continue;
             }
@@ -85,18 +88,19 @@ public class StatsNormalizer
     /**
      * Calculates consistent stats for a symbol.
      */
-    private SymbolStatsEstimate normalizeSymbolStats(Symbol symbol, SymbolStatsEstimate symbolStats, PlanNodeStatsEstimate stats, Map<Symbol, Type> types)
+    private SymbolStatsEstimate normalizeSymbolStats(Symbol symbol, SymbolStatsEstimate symbolStats, PlanNodeStatsEstimate stats, TypeProvider types)
     {
-        if (UNKNOWN_STATS.equals(symbolStats)) {
-            return UNKNOWN_STATS;
+        if (symbolStats.isUnknown()) {
+            return SymbolStatsEstimate.unknown();
         }
 
         double outputRowCount = stats.getOutputRowCount();
+        checkArgument(outputRowCount > 0, "outputRowCount must be greater than zero: %s", outputRowCount);
         double distinctValuesCount = symbolStats.getDistinctValuesCount();
         double nullsFraction = symbolStats.getNullsFraction();
 
         if (!isNaN(distinctValuesCount)) {
-            Type type = requireNonNull(types.get(symbol), () -> "No stats for symbol " + symbol);
+            Type type = requireNonNull(types.get(symbol), () -> "type is missing for symbol " + symbol);
             double maxDistinctValuesByLowHigh = maxDistinctValuesByLowHigh(symbolStats, type);
             if (distinctValuesCount > maxDistinctValuesByLowHigh) {
                 distinctValuesCount = maxDistinctValuesByLowHigh;
@@ -116,7 +120,7 @@ public class StatsNormalizer
         }
 
         if (distinctValuesCount == 0.0) {
-            return ZERO_STATS;
+            return SymbolStatsEstimate.zero();
         }
 
         return SymbolStatsEstimate.buildFrom(symbolStats)

@@ -63,7 +63,7 @@ public class TestQueryStateInfo
 
         // Verify QueryStateInfo for query queued on resource group root.a.y
         QueryStateInfo query = createQueuedQueryStateInfo(
-                createQueryInfo("query_root_a_x", QUEUED, "SELECT 1"),
+                new BasicQueryInfo(createQueryInfo("query_root_a_x", QUEUED, "SELECT 1")),
                 Optional.of(rootAX.getId()),
                 Optional.of(ImmutableList.of(rootAX.getInfo(), rootA.getInfo(), root.getInfo())));
 
@@ -110,10 +110,10 @@ public class TestQueryStateInfo
                         Duration.valueOf("8m"),
                         Duration.valueOf("7m"),
                         Duration.valueOf("34m"),
+                        Duration.valueOf("44m"),
                         Duration.valueOf("9m"),
                         Duration.valueOf("10m"),
                         Duration.valueOf("11m"),
-                        Duration.valueOf("12m"),
                         13,
                         14,
                         15,
@@ -128,10 +128,10 @@ public class TestQueryStateInfo
                         DataSize.valueOf("23GB"),
                         DataSize.valueOf("24GB"),
                         DataSize.valueOf("25GB"),
+                        DataSize.valueOf("26GB"),
                         true,
                         Duration.valueOf("23m"),
                         Duration.valueOf("24m"),
-                        Duration.valueOf("25m"),
                         Duration.valueOf("26m"),
                         true,
                         ImmutableSet.of(WAITING_FOR_MEMORY),
@@ -146,8 +146,10 @@ public class TestQueryStateInfo
                         ImmutableList.of()),
                 Optional.empty(),
                 Optional.empty(),
+                Optional.empty(),
                 ImmutableMap.of(),
                 ImmutableSet.of(),
+                ImmutableMap.of(),
                 ImmutableMap.of(),
                 ImmutableSet.of(),
                 Optional.empty(),
@@ -156,9 +158,11 @@ public class TestQueryStateInfo
                 Optional.empty(),
                 null,
                 null,
+                ImmutableList.of(),
                 ImmutableSet.of(),
                 Optional.empty(),
                 false,
+                Optional.empty(),
                 Optional.empty());
     }
 }

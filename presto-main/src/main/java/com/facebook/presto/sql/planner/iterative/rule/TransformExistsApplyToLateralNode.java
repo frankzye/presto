@@ -15,8 +15,7 @@ package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.matching.Captures;
 import com.facebook.presto.matching.Pattern;
-import com.facebook.presto.metadata.FunctionRegistry;
-import com.facebook.presto.metadata.Signature;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.Rule;
 import com.facebook.presto.sql.planner.optimizations.PlanNodeDecorrelator;
@@ -44,11 +43,12 @@ import java.util.Optional;
 
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.BooleanType.BOOLEAN;
+import static com.facebook.presto.sql.planner.plan.AggregationNode.globalAggregation;
 import static com.facebook.presto.sql.planner.plan.LateralJoinNode.Type.INNER;
 import static com.facebook.presto.sql.planner.plan.LateralJoinNode.Type.LEFT;
 import static com.facebook.presto.sql.planner.plan.Patterns.applyNode;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
-import static com.facebook.presto.sql.tree.ComparisonExpressionType.GREATER_THAN;
+import static com.facebook.presto.sql.tree.ComparisonExpression.Operator.GREATER_THAN;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.util.Objects.requireNonNull;
@@ -80,12 +80,12 @@ public class TransformExistsApplyToLateralNode
 
     private static final QualifiedName COUNT = QualifiedName.of("count");
     private static final FunctionCall COUNT_CALL = new FunctionCall(COUNT, ImmutableList.of());
-    private final Signature countSignature;
 
-    public TransformExistsApplyToLateralNode(FunctionRegistry functionRegistry)
+    private final FunctionManager functionManager;
+
+    public TransformExistsApplyToLateralNode(FunctionManager functionManager)
     {
-        requireNonNull(functionRegistry, "functionRegistry is null");
-        countSignature = functionRegistry.resolveFunction(COUNT, ImmutableList.of());
+        this.functionManager = requireNonNull(functionManager, "functionManager is null");
     }
 
     @Override
@@ -161,8 +161,11 @@ public class TransformExistsApplyToLateralNode
                         new AggregationNode(
                                 context.getIdAllocator().getNextId(),
                                 parent.getSubquery(),
-                                ImmutableMap.of(count, new Aggregation(COUNT_CALL, countSignature, Optional.empty())),
-                                ImmutableList.of(ImmutableList.of()),
+                                ImmutableMap.of(count, new Aggregation(
+                                        COUNT_CALL,
+                                        functionManager.lookupFunction(COUNT, ImmutableList.of()),
+                                        Optional.empty())),
+                                globalAggregation(),
                                 ImmutableList.of(),
                                 AggregationNode.Step.SINGLE,
                                 Optional.empty(),

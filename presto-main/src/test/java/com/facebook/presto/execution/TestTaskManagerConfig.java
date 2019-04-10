@@ -37,12 +37,13 @@ public class TestTaskManagerConfig
                 .setSplitConcurrencyAdjustmentInterval(new Duration(100, TimeUnit.MILLISECONDS))
                 .setStatusRefreshMaxWait(new Duration(1, TimeUnit.SECONDS))
                 .setInfoUpdateInterval(new Duration(3, TimeUnit.SECONDS))
-                .setVerboseStats(false)
+                .setPerOperatorCpuTimerEnabled(true)
                 .setTaskCpuTimerEnabled(true)
                 .setMaxWorkerThreads(Runtime.getRuntime().availableProcessors() * 2)
                 .setMinDrivers(Runtime.getRuntime().availableProcessors() * 2 * 2)
                 .setMinDriversPerTask(3)
                 .setMaxDriversPerTask(Integer.MAX_VALUE)
+                .setMaxTasksPerStage(Integer.MAX_VALUE)
                 .setInfoMaxAge(new Duration(15, TimeUnit.MINUTES))
                 .setClientTimeout(new Duration(2, TimeUnit.MINUTES))
                 .setMaxIndexMemoryUsage(new DataSize(64, Unit.MEGABYTE))
@@ -57,7 +58,9 @@ public class TestTaskManagerConfig
                 .setHttpTimeoutThreads(3)
                 .setTaskNotificationThreads(5)
                 .setTaskYieldThreads(3)
-                .setLevelTimeMultiplier(new BigDecimal("2")));
+                .setLevelTimeMultiplier(new BigDecimal("2"))
+                .setStatisticsCpuTimerEnabled(true)
+                .setLegacyLifespanCompletionCondition(false));
     }
 
     @Test
@@ -68,7 +71,7 @@ public class TestTaskManagerConfig
                 .put("task.split-concurrency-adjustment-interval", "1s")
                 .put("task.status-refresh-max-wait", "2s")
                 .put("task.info-update-interval", "2s")
-                .put("task.verbose-stats", "true")
+                .put("task.per-operator-cpu-timer-enabled", "false")
                 .put("task.cpu-timer-enabled", "false")
                 .put("task.max-index-memory", "512MB")
                 .put("task.share-index-loading", "true")
@@ -78,6 +81,7 @@ public class TestTaskManagerConfig
                 .put("task.min-drivers", "2")
                 .put("task.min-drivers-per-task", "5")
                 .put("task.max-drivers-per-task", "13")
+                .put("stage.max-tasks-per-stage", "999")
                 .put("task.info.max-age", "22m")
                 .put("task.client.timeout", "10s")
                 .put("sink.max-buffer-size", "42MB")
@@ -89,6 +93,8 @@ public class TestTaskManagerConfig
                 .put("task.task-notification-threads", "13")
                 .put("task.task-yield-threads", "8")
                 .put("task.level-time-multiplier", "2.1")
+                .put("task.statistics-cpu-timer-enabled", "false")
+                .put("task.legacy-lifespan-completion-condition", "true")
                 .build();
 
         TaskManagerConfig expected = new TaskManagerConfig()
@@ -96,7 +102,7 @@ public class TestTaskManagerConfig
                 .setSplitConcurrencyAdjustmentInterval(new Duration(1, TimeUnit.SECONDS))
                 .setStatusRefreshMaxWait(new Duration(2, TimeUnit.SECONDS))
                 .setInfoUpdateInterval(new Duration(2, TimeUnit.SECONDS))
-                .setVerboseStats(true)
+                .setPerOperatorCpuTimerEnabled(false)
                 .setTaskCpuTimerEnabled(false)
                 .setMaxIndexMemoryUsage(new DataSize(512, Unit.MEGABYTE))
                 .setShareIndexLoading(true)
@@ -106,6 +112,7 @@ public class TestTaskManagerConfig
                 .setMinDrivers(2)
                 .setMinDriversPerTask(5)
                 .setMaxDriversPerTask(13)
+                .setMaxTasksPerStage(999)
                 .setInfoMaxAge(new Duration(22, TimeUnit.MINUTES))
                 .setClientTimeout(new Duration(10, TimeUnit.SECONDS))
                 .setSinkMaxBufferSize(new DataSize(42, Unit.MEGABYTE))
@@ -116,7 +123,9 @@ public class TestTaskManagerConfig
                 .setHttpTimeoutThreads(10)
                 .setTaskNotificationThreads(13)
                 .setTaskYieldThreads(8)
-                .setLevelTimeMultiplier(new BigDecimal("2.1"));
+                .setLevelTimeMultiplier(new BigDecimal("2.1"))
+                .setStatisticsCpuTimerEnabled(false)
+                .setLegacyLifespanCompletionCondition(true);
 
         assertFullMapping(properties, expected);
     }

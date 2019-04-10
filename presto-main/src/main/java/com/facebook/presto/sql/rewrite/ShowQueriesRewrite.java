@@ -15,7 +15,7 @@ package com.facebook.presto.sql.rewrite;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.connector.ConnectorId;
-import com.facebook.presto.metadata.FunctionKind;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.SessionPropertyManager.SessionPropertyValue;
@@ -27,6 +27,10 @@ import com.facebook.presto.spi.CatalogSchemaName;
 import com.facebook.presto.spi.ConnectorTableMetadata;
 import com.facebook.presto.spi.PrestoException;
 import com.facebook.presto.spi.SchemaTableName;
+import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.function.FunctionKind;
+import com.facebook.presto.spi.security.PrestoPrincipal;
+import com.facebook.presto.spi.security.PrincipalType;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.sql.analyzer.QueryExplainer;
 import com.facebook.presto.sql.analyzer.SemanticException;
@@ -56,7 +60,8 @@ import com.facebook.presto.sql.tree.ShowColumns;
 import com.facebook.presto.sql.tree.ShowCreate;
 import com.facebook.presto.sql.tree.ShowFunctions;
 import com.facebook.presto.sql.tree.ShowGrants;
-import com.facebook.presto.sql.tree.ShowPartitions;
+import com.facebook.presto.sql.tree.ShowRoleGrants;
+import com.facebook.presto.sql.tree.ShowRoles;
 import com.facebook.presto.sql.tree.ShowSchemas;
 import com.facebook.presto.sql.tree.ShowSession;
 import com.facebook.presto.sql.tree.ShowTables;
@@ -71,7 +76,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.primitives.Primitives;
 
-import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -79,6 +84,8 @@ import java.util.Set;
 import java.util.SortedMap;
 
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.TABLE_COLUMNS;
+import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.TABLE_ENABLED_ROLES;
+import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.TABLE_ROLES;
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.TABLE_SCHEMATA;
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.TABLE_TABLES;
 import static com.facebook.presto.connector.informationSchema.InformationSchemaMetadata.TABLE_TABLE_PRIVILEGES;
@@ -87,8 +94,9 @@ import static com.facebook.presto.metadata.MetadataListing.listSchemas;
 import static com.facebook.presto.metadata.MetadataUtil.createCatalogSchemaName;
 import static com.facebook.presto.metadata.MetadataUtil.createQualifiedName;
 import static com.facebook.presto.metadata.MetadataUtil.createQualifiedObjectName;
+import static com.facebook.presto.spi.StandardErrorCode.INVALID_COLUMN_PROPERTY;
 import static com.facebook.presto.spi.StandardErrorCode.INVALID_TABLE_PROPERTY;
-import static com.facebook.presto.sql.ExpressionFormatter.formatQualifiedName;
+import static com.facebook.presto.sql.ExpressionUtils.combineConjuncts;
 import static com.facebook.presto.sql.ParsingUtil.createParsingOptions;
 import static com.facebook.presto.sql.QueryUtil.aliased;
 import static com.facebook.presto.sql.QueryUtil.aliasedName;
@@ -119,6 +127,7 @@ import static com.facebook.presto.sql.tree.ShowCreate.Type.VIEW;
 import static com.google.common.base.Strings.nullToEmpty;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.lang.String.format;
+import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 
@@ -133,9 +142,10 @@ final class ShowQueriesRewrite
             Optional<QueryExplainer> queryExplainer,
             Statement node,
             List<Expression> parameters,
-            AccessControl accessControl)
+            AccessControl accessControl,
+            WarningCollector warningCollector)
     {
-        return (Statement) new Visitor(metadata, parser, session, parameters, accessControl, queryExplainer).process(node, null);
+        return (Statement) new Visitor(metadata, parser, session, parameters, accessControl, queryExplainer, warningCollector).process(node, null);
     }
 
     private static class Visitor
@@ -144,11 +154,12 @@ final class ShowQueriesRewrite
         private final Metadata metadata;
         private final Session session;
         private final SqlParser sqlParser;
-        List<Expression> parameters;
+        final List<Expression> parameters;
         private final AccessControl accessControl;
         private Optional<QueryExplainer> queryExplainer;
+        private final WarningCollector warningCollector;
 
-        public Visitor(Metadata metadata, SqlParser sqlParser, Session session, List<Expression> parameters, AccessControl accessControl, Optional<QueryExplainer> queryExplainer)
+        public Visitor(Metadata metadata, SqlParser sqlParser, Session session, List<Expression> parameters, AccessControl accessControl, Optional<QueryExplainer> queryExplainer, WarningCollector warningCollector)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
             this.sqlParser = requireNonNull(sqlParser, "sqlParser is null");
@@ -156,6 +167,7 @@ final class ShowQueriesRewrite
             this.parameters = requireNonNull(parameters, "parameters is null");
             this.accessControl = requireNonNull(accessControl, "accessControl is null");
             this.queryExplainer = requireNonNull(queryExplainer, "queryExplainer is null");
+            this.warningCollector = requireNonNull(warningCollector, "warningCollector is null");
         }
 
         @Override
@@ -225,29 +237,80 @@ final class ShowQueriesRewrite
                         session.getIdentity(),
                         new CatalogSchemaName(catalogName, qualifiedTableName.getSchemaName()));
 
-                predicate = Optional.of(equal(identifier("table_name"), new StringLiteral(qualifiedTableName.getObjectName())));
+                predicate = Optional.of(combineConjuncts(
+                        equal(identifier("table_schema"), new StringLiteral(qualifiedTableName.getSchemaName())),
+                        equal(identifier("table_name"), new StringLiteral(qualifiedTableName.getObjectName()))));
             }
+            else {
+                if (catalogName == null) {
+                    throw new SemanticException(CATALOG_NOT_SPECIFIED, showGrants, "Catalog must be specified when session catalog is not set");
+                }
 
-            if (catalogName == null) {
-                throw new SemanticException(CATALOG_NOT_SPECIFIED, showGrants, "Catalog must be specified when session catalog is not set");
-            }
-
-            Set<String> allowedSchemas = listSchemas(session, metadata, accessControl, catalogName);
-            for (String schema : allowedSchemas) {
-                accessControl.checkCanShowTablesMetadata(session.getRequiredTransactionId(), session.getIdentity(), new CatalogSchemaName(catalogName, schema));
+                Set<String> allowedSchemas = listSchemas(session, metadata, accessControl, catalogName);
+                for (String schema : allowedSchemas) {
+                    accessControl.checkCanShowTablesMetadata(session.getRequiredTransactionId(), session.getIdentity(), new CatalogSchemaName(catalogName, schema));
+                }
             }
 
             return simpleQuery(
                     selectList(
+                            aliasedName("grantor", "Grantor"),
+                            aliasedName("grantor_type", "Grantor Type"),
                             aliasedName("grantee", "Grantee"),
+                            aliasedName("grantee_type", "Grantee Type"),
                             aliasedName("table_catalog", "Catalog"),
                             aliasedName("table_schema", "Schema"),
                             aliasedName("table_name", "Table"),
                             aliasedName("privilege_type", "Privilege"),
-                            aliasedName("is_grantable", "Grantable")),
+                            aliasedName("is_grantable", "Grantable"),
+                            aliasedName("with_hierarchy", "With Hierarchy")),
                     from(catalogName, TABLE_TABLE_PRIVILEGES),
                     predicate,
-                    Optional.of(ordering(ascending("grantee"), ascending("table_name"))));
+                    Optional.empty());
+        }
+
+        @Override
+        protected Node visitShowRoles(ShowRoles node, Void context)
+        {
+            if (!node.getCatalog().isPresent() && !session.getCatalog().isPresent()) {
+                throw new SemanticException(CATALOG_NOT_SPECIFIED, node, "Catalog must be specified when session catalog is not set");
+            }
+
+            String catalog = node.getCatalog().map(c -> c.getValue().toLowerCase(ENGLISH)).orElseGet(() -> session.getCatalog().get());
+
+            if (node.isCurrent()) {
+                accessControl.checkCanShowCurrentRoles(session.getRequiredTransactionId(), session.getIdentity(), catalog);
+                return simpleQuery(
+                        selectList(aliasedName("role_name", "Role")),
+                        from(catalog, TABLE_ENABLED_ROLES));
+            }
+            else {
+                accessControl.checkCanShowRoles(session.getRequiredTransactionId(), session.getIdentity(), catalog);
+                return simpleQuery(
+                        selectList(aliasedName("role_name", "Role")),
+                        from(catalog, TABLE_ROLES));
+            }
+        }
+
+        @Override
+        protected Node visitShowRoleGrants(ShowRoleGrants node, Void context)
+        {
+            if (!node.getCatalog().isPresent() && !session.getCatalog().isPresent()) {
+                throw new SemanticException(CATALOG_NOT_SPECIFIED, node, "Catalog must be specified when session catalog is not set");
+            }
+
+            String catalog = node.getCatalog().map(c -> c.getValue().toLowerCase(ENGLISH)).orElseGet(() -> session.getCatalog().get());
+            PrestoPrincipal principal = new PrestoPrincipal(PrincipalType.USER, session.getUser());
+
+            accessControl.checkCanShowRoleGrants(session.getRequiredTransactionId(), session.getIdentity(), catalog);
+            List<Expression> rows = metadata.listRoleGrants(session, catalog, principal).stream()
+                    .map(roleGrant -> row(new StringLiteral(roleGrant.getRoleName())))
+                    .collect(toList());
+
+            return simpleQuery(
+                    selectList(new AllColumns()),
+                    aliased(new Values(rows), "role_grants", ImmutableList.of("Role Grants")),
+                    ordering(ascending("Role Grants")));
         }
 
         @Override
@@ -355,16 +418,6 @@ final class ShowQueriesRewrite
         }
 
         @Override
-        protected Node visitShowPartitions(ShowPartitions showPartitions, Void context)
-        {
-            List<String> parts = new ArrayList<>(showPartitions.getTable().getParts());
-            int last = parts.size() - 1;
-            parts.set(last, parts.get(last) + "$partitions");
-            QualifiedName table = QualifiedName.of(parts);
-            throw new SemanticException(NOT_SUPPORTED, showPartitions, "SHOW PARTITIONS no longer exists. Use this instead: SELECT * FROM %s", formatQualifiedName(table));
-        }
-
-        @Override
         protected Node visitShowCreate(ShowCreate node, Void context)
         {
             QualifiedObjectName objectName = createQualifiedObjectName(session, node, node.getName());
@@ -395,39 +448,19 @@ final class ShowQueriesRewrite
 
                 ConnectorTableMetadata connectorTableMetadata = metadata.getTableMetadata(session, tableHandle.get()).getMetadata();
 
+                Map<String, PropertyMetadata<?>> allColumnProperties = metadata.getColumnPropertyManager().getAllProperties().get(tableHandle.get().getConnectorId());
+
                 List<TableElement> columns = connectorTableMetadata.getColumns().stream()
                         .filter(column -> !column.isHidden())
-                        .map(column -> new ColumnDefinition(new Identifier(column.getName()), column.getType().getDisplayName(), Optional.ofNullable(column.getComment())))
+                        .map(column -> {
+                            List<Property> propertyNodes = buildProperties(objectName, Optional.of(column.getName()), INVALID_COLUMN_PROPERTY, column.getProperties(), allColumnProperties);
+                            return new ColumnDefinition(new Identifier(column.getName()), column.getType().getDisplayName(), column.isNullable(), propertyNodes, Optional.ofNullable(column.getComment()));
+                        })
                         .collect(toImmutableList());
 
                 Map<String, Object> properties = connectorTableMetadata.getProperties();
                 Map<String, PropertyMetadata<?>> allTableProperties = metadata.getTablePropertyManager().getAllProperties().get(tableHandle.get().getConnectorId());
-                ImmutableSortedMap.Builder<String, Expression> sqlProperties = ImmutableSortedMap.naturalOrder();
-
-                for (Map.Entry<String, Object> propertyEntry : properties.entrySet()) {
-                    String propertyName = propertyEntry.getKey();
-                    Object value = propertyEntry.getValue();
-                    if (value == null) {
-                        throw new PrestoException(INVALID_TABLE_PROPERTY, format("Property %s for table %s cannot have a null value", propertyName, objectName));
-                    }
-
-                    PropertyMetadata<?> property = allTableProperties.get(propertyName);
-                    if (!Primitives.wrap(property.getJavaType()).isInstance(value)) {
-                        throw new PrestoException(INVALID_TABLE_PROPERTY, format(
-                                "Property %s for table %s should have value of type %s, not %s",
-                                propertyName,
-                                objectName,
-                                property.getJavaType().getName(),
-                                value.getClass().getName()));
-                    }
-
-                    Expression sqlExpression = getExpression(property, value);
-                    sqlProperties.put(propertyName, sqlExpression);
-                }
-
-                List<Property> propertyNodes = sqlProperties.build().entrySet().stream()
-                        .map(entry -> new Property(new Identifier(entry.getKey()), entry.getValue()))
-                        .collect(toImmutableList());
+                List<Property> propertyNodes = buildProperties(objectName, Optional.empty(), INVALID_TABLE_PROPERTY, properties, allTableProperties);
 
                 CreateTable createTable = new CreateTable(
                         QualifiedName.of(objectName.getCatalogName(), objectName.getSchemaName(), objectName.getObjectName()),
@@ -439,6 +472,51 @@ final class ShowQueriesRewrite
             }
 
             throw new UnsupportedOperationException("SHOW CREATE only supported for tables and views");
+        }
+
+        private List<Property> buildProperties(
+                Object objectName,
+                Optional<String> columnName,
+                StandardErrorCode errorCode,
+                Map<String, Object> properties,
+                Map<String, PropertyMetadata<?>> allProperties)
+        {
+            if (properties.isEmpty()) {
+                return Collections.emptyList();
+            }
+
+            ImmutableSortedMap.Builder<String, Expression> sqlProperties = ImmutableSortedMap.naturalOrder();
+
+            for (Map.Entry<String, Object> propertyEntry : properties.entrySet()) {
+                String propertyName = propertyEntry.getKey();
+                Object value = propertyEntry.getValue();
+                if (value == null) {
+                    throw new PrestoException(errorCode, format("Property %s for %s cannot have a null value", propertyName, toQualifedName(objectName, columnName)));
+                }
+
+                PropertyMetadata<?> property = allProperties.get(propertyName);
+                if (!Primitives.wrap(property.getJavaType()).isInstance(value)) {
+                    throw new PrestoException(errorCode, format(
+                            "Property %s for %s should have value of type %s, not %s",
+                            propertyName,
+                            toQualifedName(objectName, columnName),
+                            property.getJavaType().getName(),
+                            value.getClass().getName()));
+                }
+
+                Expression sqlExpression = getExpression(property, value);
+                sqlProperties.put(propertyName, sqlExpression);
+            }
+
+            return sqlProperties.build().entrySet().stream()
+                    .map(entry -> new Property(new Identifier(entry.getKey()), entry.getValue()))
+                    .collect(toImmutableList());
+        }
+
+        private static String toQualifedName(Object objectName, Optional<String> columnName)
+        {
+            return columnName.map(s -> format("column %s of table %s", s, objectName))
+                    .orElseGet(() -> "table " + objectName);
         }
 
         @Override
@@ -536,7 +614,7 @@ final class ShowQueriesRewrite
         private Query parseView(String view, QualifiedObjectName name, Node node)
         {
             try {
-                Statement statement = sqlParser.createStatement(view, createParsingOptions(session));
+                Statement statement = sqlParser.createStatement(view, createParsingOptions(session, warningCollector));
                 return (Query) statement;
             }
             catch (ParsingException e) {

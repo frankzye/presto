@@ -32,13 +32,13 @@ import com.facebook.presto.spi.block.SortOrder;
 import com.facebook.presto.spi.session.PropertyMetadata;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
-import com.google.common.base.CharMatcher;
 import com.google.common.base.Splitter;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import io.airlift.event.client.EventClient;
+import io.airlift.units.DataSize;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -65,18 +65,18 @@ import java.util.function.Consumer;
 
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_METADATA;
-import static com.facebook.presto.hive.HiveErrorCode.HIVE_INVALID_PARTITION_VALUE;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_READ_ONLY;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PARTITION_SCHEMA_MISMATCH;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PATH_ALREADY_EXISTS;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_WRITER_OPEN_ERROR;
-import static com.facebook.presto.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
-import static com.facebook.presto.hive.HiveSessionProperties.getWriterSortBufferSize;
+import static com.facebook.presto.hive.HiveSessionProperties.isWritingStagingFilesEnabled;
 import static com.facebook.presto.hive.HiveType.toHiveTypes;
-import static com.facebook.presto.hive.HiveWriteUtils.getField;
+import static com.facebook.presto.hive.HiveWriteUtils.createPartitionValues;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.DIRECT_TO_TARGET_EXISTING_DIRECTORY;
+import static com.facebook.presto.hive.PartitionUpdate.FileWriteInfo;
 import static com.facebook.presto.hive.metastore.MetastoreUtil.getHiveSchema;
+import static com.facebook.presto.hive.metastore.PrestoTableType.TEMPORARY_TABLE;
 import static com.facebook.presto.hive.metastore.StorageFormat.fromHiveStorageFormat;
 import static com.facebook.presto.hive.util.ConfigurationUtils.toJobConf;
 import static com.facebook.presto.spi.StandardErrorCode.NOT_FOUND;
@@ -84,10 +84,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static com.google.common.io.BaseEncoding.base16;
 import static java.lang.Math.min;
 import static java.lang.String.format;
-import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 import static java.util.UUID.randomUUID;
 import static java.util.function.Function.identity;
@@ -125,7 +123,8 @@ public class HiveWriterFactory
     private final JobConf conf;
 
     private final Table table;
-    private final int maxSortFilesPerBucket;
+    private final DataSize sortBufferSize;
+    private final int maxOpenSortFiles;
     private final boolean immutablePartitions;
     private final InsertExistingPartitionsBehavior insertExistingPartitionsBehavior;
 
@@ -138,6 +137,8 @@ public class HiveWriterFactory
     private final Map<String, String> sessionProperties;
 
     private final HiveWriterStats hiveWriterStats;
+
+    private final OrcFileWriterFactory orcFileWriterFactory;
 
     public HiveWriterFactory(
             Set<HiveFileWriterFactory> fileWriterFactories,
@@ -156,13 +157,15 @@ public class HiveWriterFactory
             TypeManager typeManager,
             HdfsEnvironment hdfsEnvironment,
             PageSorter pageSorter,
-            int maxSortFilesPerBucket,
+            DataSize sortBufferSize,
+            int maxOpenSortFiles,
             boolean immutablePartitions,
             ConnectorSession session,
             NodeManager nodeManager,
             EventClient eventClient,
             HiveSessionProperties hiveSessionProperties,
-            HiveWriterStats hiveWriterStats)
+            HiveWriterStats hiveWriterStats,
+            OrcFileWriterFactory orcFileWriterFactory)
     {
         this.fileWriterFactories = ImmutableSet.copyOf(requireNonNull(fileWriterFactories, "fileWriterFactories is null"));
         this.schemaName = requireNonNull(schemaName, "schemaName is null");
@@ -180,7 +183,8 @@ public class HiveWriterFactory
 
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.pageSorter = requireNonNull(pageSorter, "pageSorter is null");
-        this.maxSortFilesPerBucket = maxSortFilesPerBucket;
+        this.sortBufferSize = requireNonNull(sortBufferSize, "sortBufferSize is null");
+        this.maxOpenSortFiles = maxOpenSortFiles;
         this.immutablePartitions = immutablePartitions;
         this.insertExistingPartitionsBehavior = HiveSessionProperties.getInsertExistingPartitionsBehavior(session);
         if (immutablePartitions) {
@@ -250,6 +254,8 @@ public class HiveWriterFactory
         }
 
         this.hiveWriterStats = requireNonNull(hiveWriterStats, "hiveWriterStats is null");
+
+        this.orcFileWriterFactory = requireNonNull(orcFileWriterFactory, "orcFileWriterFactory is null");
     }
 
     public HiveWriter createWriter(Page partitionColumns, int position, OptionalInt bucketNumber)
@@ -262,15 +268,7 @@ public class HiveWriterFactory
             checkArgument(!bucketNumber.isPresent(), "Bucket number provided by for table that is not bucketed");
         }
 
-        String fileName;
-        if (bucketNumber.isPresent()) {
-            fileName = computeBucketedFileName(filePrefix, bucketNumber.getAsInt());
-        }
-        else {
-            fileName = filePrefix + "_" + randomUUID();
-        }
-
-        List<String> partitionValues = toPartitionValues(partitionColumns, position);
+        List<String> partitionValues = createPartitionValues(partitionColumnTypes, partitionColumns, position);
 
         Optional<String> partitionName;
         if (!partitionColumnNames.isEmpty()) {
@@ -334,6 +332,11 @@ public class HiveWriterFactory
                     // a new partition in an existing partitioned table
                     updateMode = UpdateMode.NEW;
                     writeInfo = locationService.getPartitionWriteInfo(locationHandle, partition, partitionName.get());
+                }
+                else if (table.getTableType().equals(TEMPORARY_TABLE)) {
+                    // Note: temporary table is always empty at this step
+                    updateMode = UpdateMode.APPEND;
+                    writeInfo = locationService.getTableWriteInfo(locationHandle);
                 }
                 else {
                     if (bucketNumber.isPresent()) {
@@ -420,9 +423,24 @@ public class HiveWriterFactory
 
         validateSchema(partitionName, schema);
 
-        String fileNameWithExtension = fileName + getFileExtension(conf, outputStorageFormat);
+        String extension = getFileExtension(conf, outputStorageFormat);
+        String targetFileName;
+        if (bucketNumber.isPresent()) {
+            targetFileName = computeBucketedFileName(filePrefix, bucketNumber.getAsInt()) + extension;
+        }
+        else {
+            targetFileName = filePrefix + "_" + randomUUID() + extension;
+        }
 
-        Path path = new Path(writeInfo.getWritePath(), fileNameWithExtension);
+        String writeFileName;
+        if (isWritingStagingFilesEnabled(session)) {
+            writeFileName = ".tmp.presto." + filePrefix + "_" + randomUUID() + extension;
+        }
+        else {
+            writeFileName = targetFileName;
+        }
+
+        Path path = new Path(writeInfo.getWritePath(), writeFileName);
 
         HiveFileWriter hiveFileWriter = null;
         for (HiveFileWriterFactory fileWriterFactory : fileWriterFactories) {
@@ -451,7 +469,8 @@ public class HiveWriterFactory
                     schema,
                     partitionStorageFormat.getEstimatedWriterSystemMemoryUsage(),
                     conf,
-                    typeManager);
+                    typeManager,
+                    session);
         }
 
         String writerImplementation = hiveFileWriter.getClass().getName();
@@ -516,19 +535,20 @@ public class HiveWriterFactory
                     fileSystem,
                     new Path(path.getParent(), ".tmp-sort." + path.getName()),
                     hiveFileWriter,
-                    getWriterSortBufferSize(session),
-                    maxSortFilesPerBucket,
+                    sortBufferSize,
+                    maxOpenSortFiles,
                     types,
                     sortFields,
                     sortOrders,
-                    pageSorter);
+                    pageSorter,
+                    (fs, p) -> orcFileWriterFactory.createOrcDataSink(session, fs, p));
         }
 
         return new HiveWriter(
                 hiveFileWriter,
                 partitionName,
                 updateMode,
-                fileNameWithExtension,
+                new FileWriteInfo(writeFileName, targetFileName),
                 writeInfo.getWritePath().toString(),
                 writeInfo.getTargetPath().toString(),
                 onCommit,
@@ -579,27 +599,6 @@ public class HiveWriterFactory
                         fileColumnHiveType));
             }
         }
-    }
-
-    private List<String> toPartitionValues(Page partitionColumns, int position)
-    {
-        ImmutableList.Builder<String> partitionValues = ImmutableList.builder();
-        for (int field = 0; field < partitionColumns.getChannelCount(); field++) {
-            Object value = getField(partitionColumnTypes.get(field), partitionColumns.getBlock(field), position);
-            if (value == null) {
-                partitionValues.add(HIVE_DEFAULT_DYNAMIC_PARTITION);
-            }
-            else {
-                String valueString = value.toString();
-                if (!CharMatcher.inRange((char) 0x20, (char) 0x7E).matchesAllOf(valueString)) {
-                    throw new PrestoException(HIVE_INVALID_PARTITION_VALUE,
-                            "Hive partition keys can only contain printable ASCII characters (0x20 - 0x7E). Invalid value: " +
-                                    base16().withSeparator(" ", 2).encode(valueString.getBytes(UTF_8)));
-                }
-                partitionValues.add(valueString);
-            }
-        }
-        return partitionValues.build();
     }
 
     public static String computeBucketedFileName(String filePrefix, int bucket)

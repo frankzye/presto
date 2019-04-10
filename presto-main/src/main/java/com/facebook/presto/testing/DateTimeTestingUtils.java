@@ -21,9 +21,16 @@ import com.facebook.presto.spi.type.TimeZoneKey;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.ZoneId;
 
+import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
+import static java.lang.Math.toIntExact;
+import static java.time.ZoneOffset.UTC;
 import static java.util.concurrent.TimeUnit.DAYS;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 public final class DateTimeTestingUtils
@@ -38,11 +45,19 @@ public final class DateTimeTestingUtils
             int minuteOfHour,
             int secondOfMinute,
             int millisOfSecond,
-            DateTimeZone baseZone,
-            TimeZoneKey timestampZone,
             Session session)
     {
-        return sqlTimestampOf(year, monthOfYear, dayOfMonth, hourOfDay, minuteOfHour, secondOfMinute, millisOfSecond, baseZone, timestampZone, session.toConnectorSession());
+        return sqlTimestampOf(
+                year,
+                monthOfYear,
+                dayOfMonth,
+                hourOfDay,
+                minuteOfHour,
+                secondOfMinute,
+                millisOfSecond,
+                getDateTimeZone(session.getTimeZoneKey()),
+                session.getTimeZoneKey(),
+                session.toConnectorSession());
     }
 
     public static SqlTimestamp sqlTimestampOf(
@@ -60,9 +75,7 @@ public final class DateTimeTestingUtils
         if (session.isLegacyTimestamp()) {
             return new SqlTimestamp(new DateTime(year, monthOfYear, dayOfMonth, hourOfDay, minuteOfHour, secondOfMinute, millisOfSecond, baseZone).getMillis(), timestampZone);
         }
-        else {
-            return new SqlTimestamp(new DateTime(year, monthOfYear, dayOfMonth, hourOfDay, minuteOfHour, secondOfMinute, millisOfSecond, DateTimeZone.UTC).getMillis());
-        }
+        return sqlTimestampOf(LocalDateTime.of(year, monthOfYear, dayOfMonth, hourOfDay, minuteOfHour, secondOfMinute, millisToNanos(millisOfSecond)));
     }
 
     /**
@@ -98,27 +111,28 @@ public final class DateTimeTestingUtils
             int minuteOfHour,
             int secondOfMinute,
             int millisOfSecond,
-            DateTimeZone baseZone,
-            TimeZoneKey timestampZone,
             Session session)
     {
-        return sqlTimeOf(hourOfDay, minuteOfHour, secondOfMinute, millisOfSecond, baseZone, timestampZone, session.toConnectorSession());
+        LocalTime time = LocalTime.of(hourOfDay, minuteOfHour, secondOfMinute, millisToNanos(millisOfSecond));
+        return sqlTimeOf(time, session);
     }
 
-    public static SqlTime sqlTimeOf(
-            int hourOfDay,
-            int minuteOfHour,
-            int secondOfMinute,
-            int millisOfSecond,
-            DateTimeZone baseZone,
-            TimeZoneKey timestampZone,
-            ConnectorSession session)
+    public static SqlTime sqlTimeOf(LocalTime time, Session session)
     {
-        if (session.isLegacyTimestamp()) {
-            return new SqlTime(new DateTime(1970, 1, 1, hourOfDay, minuteOfHour, secondOfMinute, millisOfSecond, baseZone).getMillis(), timestampZone);
+        if (session.toConnectorSession().isLegacyTimestamp()) {
+            long millisUtc = LocalDate.ofEpochDay(0)
+                    .atTime(time)
+                    .atZone(UTC)
+                    .withZoneSameLocal(ZoneId.of(session.getTimeZoneKey().getId()))
+                    .toInstant()
+                    .toEpochMilli();
+            return new SqlTime(millisUtc, session.getTimeZoneKey());
         }
-        else {
-            return new SqlTime(new DateTime(1970, 1, 1, hourOfDay, minuteOfHour, secondOfMinute, millisOfSecond, DateTimeZone.UTC).getMillis());
-        }
+        return new SqlTime(NANOSECONDS.toMillis(time.toNanoOfDay()));
+    }
+
+    private static int millisToNanos(int millisOfSecond)
+    {
+        return toIntExact(MILLISECONDS.toNanos(millisOfSecond));
     }
 }

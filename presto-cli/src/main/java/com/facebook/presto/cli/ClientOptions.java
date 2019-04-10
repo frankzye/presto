@@ -159,10 +159,12 @@ public class ClientOptions
                 clientInfo,
                 catalog,
                 schema,
+                null,
                 TimeZone.getDefault().getID(),
                 Locale.getDefault(),
                 toResourceEstimates(resourceEstimates),
                 toProperties(sessionProperties),
+                emptyMap(),
                 emptyMap(),
                 null,
                 clientRequestTimeout);

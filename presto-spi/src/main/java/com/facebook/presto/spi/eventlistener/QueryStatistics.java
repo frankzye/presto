@@ -25,11 +25,11 @@ public class QueryStatistics
     private final Duration wallTime;
     private final Duration queuedTime;
     private final Optional<Duration> analysisTime;
-    private final Optional<Duration> distributedPlanningTime;
 
     private final long peakUserMemoryBytes;
     // peak of user + system memory
     private final long peakTotalNonRevocableMemoryBytes;
+    private final long peakTaskUserMemory;
     private final long peakTaskTotalMemory;
     private final long totalBytes;
     private final long totalRows;
@@ -54,9 +54,9 @@ public class QueryStatistics
             Duration wallTime,
             Duration queuedTime,
             Optional<Duration> analysisTime,
-            Optional<Duration> distributedPlanningTime,
             long peakUserMemoryBytes,
             long peakTotalNonRevocableMemoryBytes,
+            long peakTaskUserMemory,
             long peakTaskTotalMemory,
             long totalBytes,
             long totalRows,
@@ -75,9 +75,9 @@ public class QueryStatistics
         this.wallTime = requireNonNull(wallTime, "wallTime is null");
         this.queuedTime = requireNonNull(queuedTime, "queuedTime is null");
         this.analysisTime = requireNonNull(analysisTime, "analysisTime is null");
-        this.distributedPlanningTime = requireNonNull(distributedPlanningTime, "distributedPlanningTime is null");
         this.peakUserMemoryBytes = peakUserMemoryBytes;
         this.peakTotalNonRevocableMemoryBytes = peakTotalNonRevocableMemoryBytes;
+        this.peakTaskUserMemory = peakTaskUserMemory;
         this.peakTaskTotalMemory = peakTaskTotalMemory;
         this.totalBytes = totalBytes;
         this.totalRows = totalRows;
@@ -113,11 +113,6 @@ public class QueryStatistics
         return analysisTime;
     }
 
-    public Optional<Duration> getDistributedPlanningTime()
-    {
-        return distributedPlanningTime;
-    }
-
     public long getPeakUserMemoryBytes()
     {
         return peakUserMemoryBytes;
@@ -128,9 +123,14 @@ public class QueryStatistics
         return peakTotalNonRevocableMemoryBytes;
     }
 
-    public long peakTaskTotalMemory()
+    public long getPeakTaskTotalMemory()
     {
         return peakTaskTotalMemory;
+    }
+
+    public long getPeakTaskUserMemory()
+    {
+        return peakTaskUserMemory;
     }
 
     public long getTotalBytes()

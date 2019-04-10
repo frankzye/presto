@@ -19,6 +19,8 @@ import com.facebook.presto.operator.scalar.FunctionAssertions;
 import com.facebook.presto.spi.type.SqlTimeWithTimeZone;
 import com.facebook.presto.spi.type.SqlTimestampWithTimeZone;
 import com.facebook.presto.spi.type.TimeZoneKey;
+import com.facebook.presto.sql.analyzer.SemanticErrorCode;
+import com.facebook.presto.testing.TestingSession;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;
@@ -40,7 +42,7 @@ import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
 public abstract class TestTimeBase
         extends AbstractTestFunctions
 {
-    protected static final TimeZoneKey TIME_ZONE_KEY = getTimeZoneKey("Europe/Berlin");
+    protected static final TimeZoneKey TIME_ZONE_KEY = TestingSession.DEFAULT_TIME_ZONE_KEY;
     protected static final DateTimeZone DATE_TIME_ZONE = getDateTimeZone(TIME_ZONE_KEY);
 
     public TestTimeBase(boolean legacyTimestamp)
@@ -54,13 +56,14 @@ public abstract class TestTimeBase
     @Test
     public void testLiteral()
     {
-        assertFunction("TIME '03:04:05.321'", TIME, sqlTimeOf(3, 4, 5, 321, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
-        assertFunction("TIME '03:04:05'", TIME, sqlTimeOf(3, 4, 5, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
-        assertFunction("TIME '03:04'", TIME, sqlTimeOf(3, 4, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+        assertFunction("TIME '03:04:05.321'", TIME, sqlTimeOf(3, 4, 5, 321, session));
+        assertFunction("TIME '03:04:05'", TIME, sqlTimeOf(3, 4, 5, 0, session));
+        assertFunction("TIME '03:04'", TIME, sqlTimeOf(3, 4, 0, 0, session));
+        assertInvalidFunction("TIME 'text'", SemanticErrorCode.INVALID_LITERAL, "line 1:1: 'text' is not a valid time literal");
     }
 
     @Test
-    public void testSubstract()
+    public void testSubtract()
     {
         functionAssertions.assertFunctionString("TIME '14:15:16.432' - TIME '03:04:05.321'", INTERVAL_DAY_TIME, "0 11:11:11.111");
 
@@ -145,7 +148,7 @@ public abstract class TestTimeBase
     {
         TimeZoneKey timeZoneThatChangedSince1970 = getTimeZoneKey("Asia/Kathmandu");
         DateTimeZone dateTimeZoneThatChangedSince1970 = getDateTimeZone(timeZoneThatChangedSince1970);
-        Session session = testSessionBuilder()
+        Session session = Session.builder(this.session)
                 .setTimeZoneKey(timeZoneThatChangedSince1970)
                 .build();
         try (FunctionAssertions localAssertions = new FunctionAssertions(session)) {
@@ -161,7 +164,7 @@ public abstract class TestTimeBase
     {
         // Australia/Sydney will switch DST a second after session start
         // For simplicity we have to use time zone that is going forward when entering DST zone with 1970-01-01
-        Session session = testSessionBuilder()
+        Session session = Session.builder(this.session)
                 .setTimeZoneKey(getTimeZoneKey("Australia/Sydney"))
                 .setStartTime(new DateTime(2017, 10, 1, 1, 59, 59, 999, getDateTimeZone(getTimeZoneKey("Australia/Sydney"))).getMillis())
                 .build();
@@ -175,7 +178,7 @@ public abstract class TestTimeBase
     {
         assertFunction("cast(TIME '03:04:05.321' as timestamp)",
                 TIMESTAMP,
-                sqlTimestampOf(1970, 1, 1, 3, 4, 5, 321, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 1, 1, 3, 4, 5, 321, session));
     }
 
     @Test

@@ -13,9 +13,9 @@
  */
 package com.facebook.presto.operator;
 
-import com.facebook.presto.OutputBuffers;
 import com.facebook.presto.block.BlockEncodingManager;
 import com.facebook.presto.execution.StateMachine;
+import com.facebook.presto.execution.buffer.OutputBuffers;
 import com.facebook.presto.execution.buffer.PagesSerdeFactory;
 import com.facebook.presto.execution.buffer.PartitionedOutputBuffer;
 import com.facebook.presto.memory.context.SimpleLocalMemoryContext;
@@ -55,11 +55,11 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 
-import static com.facebook.presto.OutputBuffers.BufferType.PARTITIONED;
-import static com.facebook.presto.OutputBuffers.createInitialEmptyOutputBuffers;
 import static com.facebook.presto.SessionTestUtils.TEST_SESSION;
 import static com.facebook.presto.execution.buffer.BufferState.OPEN;
 import static com.facebook.presto.execution.buffer.BufferState.TERMINAL_BUFFER_STATES;
+import static com.facebook.presto.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
+import static com.facebook.presto.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static com.facebook.presto.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
@@ -124,6 +124,7 @@ public class BenchmarkPartitionedOutputOperator
             PartitionedOutputBuffer buffer = createPartitionedBuffer(
                     buffers.withNoMoreBufferIds(),
                     new DataSize(Long.MAX_VALUE, BYTE)); // don't let output buffer block
+            buffer.registerLifespanCompletionCallback(ignore -> {});
             PartitionedOutputFactory operatorFactory = new PartitionedOutputFactory(
                     partitionFunction,
                     ImmutableList.of(0),
@@ -195,7 +196,7 @@ public class BenchmarkPartitionedOutputOperator
             return TestingTaskContext.builder(EXECUTOR, SCHEDULER, TEST_SESSION)
                     .setMemoryPoolSize(MAX_MEMORY)
                     .build()
-                    .addPipelineContext(0, true, true)
+                    .addPipelineContext(0, true, true, false)
                     .addDriverContext();
         }
 
@@ -206,7 +207,7 @@ public class BenchmarkPartitionedOutputOperator
                     new StateMachine<>("bufferState", SCHEDULER, OPEN, TERMINAL_BUFFER_STATES),
                     buffers,
                     dataSize,
-                    () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext()),
+                    () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
                     SCHEDULER);
         }
     }

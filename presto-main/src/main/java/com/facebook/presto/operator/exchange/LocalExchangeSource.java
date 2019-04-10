@@ -13,6 +13,8 @@
  */
 package com.facebook.presto.operator.exchange;
 
+import com.facebook.presto.operator.WorkProcessor;
+import com.facebook.presto.operator.WorkProcessor.ProcessState;
 import com.facebook.presto.spi.Page;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
@@ -93,6 +95,27 @@ public class LocalExchangeSource
 
         // notify readers outside of lock since this may result in a callback
         notEmptyFuture.set(null);
+    }
+
+    public WorkProcessor<Page> pages()
+    {
+        return WorkProcessor.create(() -> {
+            Page page = removePage();
+            if (page == null) {
+                if (isFinished()) {
+                    return ProcessState.finished();
+                }
+
+                ListenableFuture<?> blocked = waitForReading();
+                if (!blocked.isDone()) {
+                    return ProcessState.blocked(blocked);
+                }
+
+                return ProcessState.yield();
+            }
+
+            return ProcessState.ofResult(page);
+        });
     }
 
     public Page removePage()

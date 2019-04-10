@@ -13,6 +13,7 @@
  */
 package com.facebook.presto.client;
 
+import com.facebook.presto.spi.security.SelectedRole;
 import com.facebook.presto.spi.type.TimeZoneKey;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -41,11 +42,13 @@ public class ClientSession
     private final String clientInfo;
     private final String catalog;
     private final String schema;
+    private final String path;
     private final TimeZoneKey timeZone;
     private final Locale locale;
     private final Map<String, String> resourceEstimates;
     private final Map<String, String> properties;
     private final Map<String, String> preparedStatements;
+    private final Map<String, SelectedRole> roles;
     private final String transactionId;
     private final Duration clientRequestTimeout;
 
@@ -70,11 +73,13 @@ public class ClientSession
             String clientInfo,
             String catalog,
             String schema,
+            String path,
             String timeZoneId,
             Locale locale,
             Map<String, String> resourceEstimates,
             Map<String, String> properties,
             Map<String, String> preparedStatements,
+            Map<String, SelectedRole> roles,
             String transactionId,
             Duration clientRequestTimeout)
     {
@@ -86,12 +91,14 @@ public class ClientSession
         this.clientInfo = clientInfo;
         this.catalog = catalog;
         this.schema = schema;
+        this.path = path;
         this.locale = locale;
         this.timeZone = TimeZoneKey.getTimeZoneKey(timeZoneId);
         this.transactionId = transactionId;
         this.resourceEstimates = ImmutableMap.copyOf(requireNonNull(resourceEstimates, "resourceEstimates is null"));
         this.properties = ImmutableMap.copyOf(requireNonNull(properties, "properties is null"));
         this.preparedStatements = ImmutableMap.copyOf(requireNonNull(preparedStatements, "preparedStatements is null"));
+        this.roles = ImmutableMap.copyOf(requireNonNull(roles, "roles is null"));
         this.clientRequestTimeout = clientRequestTimeout;
 
         for (String clientTag : clientTags) {
@@ -155,6 +162,11 @@ public class ClientSession
         return schema;
     }
 
+    public String getPath()
+    {
+        return path;
+    }
+
     public TimeZoneKey getTimeZone()
     {
         return timeZone;
@@ -178,6 +190,14 @@ public class ClientSession
     public Map<String, String> getPreparedStatements()
     {
         return preparedStatements;
+    }
+
+    /**
+     * Returns the map of catalog name -> selected role
+     */
+    public Map<String, SelectedRole> getRoles()
+    {
+        return roles;
     }
 
     public String getTransactionId()
@@ -205,6 +225,7 @@ public class ClientSession
                 .add("clientInfo", clientInfo)
                 .add("catalog", catalog)
                 .add("schema", schema)
+                .add("path", path)
                 .add("traceToken", traceToken.orElse(null))
                 .add("timeZone", timeZone)
                 .add("locale", locale)
@@ -224,11 +245,13 @@ public class ClientSession
         private String clientInfo;
         private String catalog;
         private String schema;
+        private String path;
         private TimeZoneKey timeZone;
         private Locale locale;
         private Map<String, String> resourceEstimates;
         private Map<String, String> properties;
         private Map<String, String> preparedStatements;
+        private Map<String, SelectedRole> roles;
         private String transactionId;
         private Duration clientRequestTimeout;
 
@@ -243,11 +266,13 @@ public class ClientSession
             clientInfo = clientSession.getClientInfo();
             catalog = clientSession.getCatalog();
             schema = clientSession.getSchema();
+            path = clientSession.getPath();
             timeZone = clientSession.getTimeZone();
             locale = clientSession.getLocale();
             resourceEstimates = clientSession.getResourceEstimates();
             properties = clientSession.getProperties();
             preparedStatements = clientSession.getPreparedStatements();
+            roles = clientSession.getRoles();
             transactionId = clientSession.getTransactionId();
             clientRequestTimeout = clientSession.getClientRequestTimeout();
         }
@@ -264,9 +289,21 @@ public class ClientSession
             return this;
         }
 
+        public Builder withPath(String path)
+        {
+            this.path = requireNonNull(path, "path is null");
+            return this;
+        }
+
         public Builder withProperties(Map<String, String> properties)
         {
             this.properties = requireNonNull(properties, "properties is null");
+            return this;
+        }
+
+        public Builder withRoles(Map<String, SelectedRole> roles)
+        {
+            this.roles = roles;
             return this;
         }
 
@@ -299,11 +336,13 @@ public class ClientSession
                     clientInfo,
                     catalog,
                     schema,
+                    path,
                     timeZone.getId(),
                     locale,
                     resourceEstimates,
                     properties,
                     preparedStatements,
+                    roles,
                     transactionId,
                     clientRequestTimeout);
         }

@@ -15,8 +15,8 @@ package com.facebook.presto.cost;
 
 import com.facebook.presto.Session;
 import com.facebook.presto.matching.Pattern;
-import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.iterative.Lookup;
 import com.facebook.presto.sql.planner.plan.AggregationNode;
 import com.facebook.presto.sql.planner.plan.AggregationNode.Aggregation;
@@ -25,8 +25,8 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Optional;
 
+import static com.facebook.presto.sql.planner.plan.AggregationNode.Step.SINGLE;
 import static com.facebook.presto.sql.planner.plan.Patterns.aggregation;
-import static com.google.common.collect.Iterables.getOnlyElement;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
 
@@ -47,15 +47,19 @@ public class AggregationStatsRule
     }
 
     @Override
-    protected Optional<PlanNodeStatsEstimate> doCalculate(AggregationNode node, StatsProvider statsProvider, Lookup lookup, Session session, Map<Symbol, Type> types)
+    protected Optional<PlanNodeStatsEstimate> doCalculate(AggregationNode node, StatsProvider statsProvider, Lookup lookup, Session session, TypeProvider types)
     {
-        if (node.getGroupingSets().size() != 1) {
+        if (node.getGroupingSetCount() != 1) {
+            return Optional.empty();
+        }
+
+        if (node.getStep() != SINGLE) {
             return Optional.empty();
         }
 
         return Optional.of(groupBy(
                 statsProvider.getStats(node.getSource()),
-                getOnlyElement(node.getGroupingSets()),
+                node.getGroupingKeys(),
                 node.getAggregations()));
     }
 
@@ -93,6 +97,6 @@ public class AggregationStatsRule
         requireNonNull(sourceStats, "sourceStats is null");
 
         // TODO implement simple aggregations like: min, max, count, sum
-        return SymbolStatsEstimate.UNKNOWN_STATS;
+        return SymbolStatsEstimate.unknown();
     }
 }

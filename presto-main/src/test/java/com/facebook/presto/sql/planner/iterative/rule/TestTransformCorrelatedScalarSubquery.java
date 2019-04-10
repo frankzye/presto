@@ -15,6 +15,7 @@
 package com.facebook.presto.sql.planner.iterative.rule;
 
 import com.facebook.presto.spi.StandardErrorCode;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.type.StandardTypes;
 import com.facebook.presto.sql.planner.Symbol;
 import com.facebook.presto.sql.planner.iterative.Rule;
@@ -36,6 +37,7 @@ import org.testng.annotations.Test;
 import java.util.List;
 import java.util.Optional;
 
+import static com.facebook.presto.spi.type.BigintType.BIGINT;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.assignUniqueId;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.expression;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.filter;
@@ -43,14 +45,15 @@ import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.latera
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.markDistinct;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.project;
 import static com.facebook.presto.sql.planner.assertions.PlanMatchPattern.values;
-import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.expressions;
+import static com.facebook.presto.sql.planner.iterative.rule.test.PlanBuilder.constantExpressions;
+import static com.facebook.presto.sql.relational.Expressions.constant;
 import static com.facebook.presto.sql.tree.BooleanLiteral.TRUE_LITERAL;
 
 public class TestTransformCorrelatedScalarSubquery
         extends BaseRuleTest
 {
-    private static final ImmutableList<List<Expression>> ONE_ROW = ImmutableList.of(ImmutableList.of());
-    private static final ImmutableList<List<Expression>> TWO_ROWS = ImmutableList.of(ImmutableList.of(), ImmutableList.of());
+    private static final ImmutableList<List<RowExpression>> ONE_ROW = ImmutableList.of(ImmutableList.of(constant(1, BIGINT)));
+    private static final ImmutableList<List<RowExpression>> TWO_ROWS = ImmutableList.of(ImmutableList.of(constant(1, BIGINT)), ImmutableList.of(constant(2, BIGINT)));
 
     private Rule rule = new TransformCorrelatedScalarSubquery();
 
@@ -80,7 +83,7 @@ public class TestTransformCorrelatedScalarSubquery
                 .on(p -> p.lateral(
                         ImmutableList.<Symbol>of(),
                         p.values(p.symbol("a")),
-                        p.values(ImmutableList.of(p.symbol("b")), ImmutableList.of(expressions("1")))))
+                        p.values(ImmutableList.of(p.symbol("b")), ImmutableList.of(constantExpressions(BIGINT, 1)))))
                 .doesNotFire();
     }
 
@@ -101,7 +104,7 @@ public class TestTransformCorrelatedScalarSubquery
                                         ensureScalarSubquery(),
                                         markDistinct(
                                                 "is_distinct",
-                                                ImmutableList.of("unique"),
+                                                ImmutableList.of("corr", "unique"),
                                                 lateral(
                                                         ImmutableList.of("corr"),
                                                         assignUniqueId(
@@ -131,7 +134,7 @@ public class TestTransformCorrelatedScalarSubquery
                                         ensureScalarSubquery(),
                                         markDistinct(
                                                 "is_distinct",
-                                                ImmutableList.of("unique"),
+                                                ImmutableList.of("corr", "unique"),
                                                 lateral(
                                                         ImmutableList.of("corr"),
                                                         assignUniqueId(
@@ -163,7 +166,7 @@ public class TestTransformCorrelatedScalarSubquery
                                         ensureScalarSubquery(),
                                         markDistinct(
                                                 "is_distinct",
-                                                ImmutableList.of("unique"),
+                                                ImmutableList.of("corr", "unique"),
                                                 lateral(
                                                         ImmutableList.of("corr"),
                                                         assignUniqueId(

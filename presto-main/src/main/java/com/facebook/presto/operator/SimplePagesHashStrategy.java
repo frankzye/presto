@@ -13,7 +13,7 @@
  */
 package com.facebook.presto.operator;
 
-import com.facebook.presto.metadata.FunctionRegistry;
+import com.facebook.presto.metadata.FunctionManager;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.PageBuilder;
 import com.facebook.presto.spi.block.Block;
@@ -29,6 +29,7 @@ import java.util.OptionalInt;
 
 import static com.facebook.presto.spi.function.OperatorType.IS_DISTINCT_FROM;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static com.facebook.presto.util.Failures.internalError;
 import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
@@ -53,7 +54,7 @@ public class SimplePagesHashStrategy
             List<Integer> hashChannels,
             OptionalInt precomputedHashChannel,
             Optional<Integer> sortChannel,
-            FunctionRegistry functionRegistry,
+            FunctionManager functionManager,
             boolean groupByUsesEqualTo)
     {
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
@@ -69,12 +70,12 @@ public class SimplePagesHashStrategy
             this.precomputedHashChannel = null;
         }
         this.sortChannel = requireNonNull(sortChannel, "sortChannel is null");
-        requireNonNull(functionRegistry, "functionRegistry is null");
+        requireNonNull(functionManager, "functionManager is null");
         this.groupByUsesEqualTo = groupByUsesEqualTo;
         ImmutableList.Builder<MethodHandle> distinctFromMethodHandlesBuilder = ImmutableList.builder();
         for (Type type : types) {
             distinctFromMethodHandlesBuilder.add(
-                    functionRegistry.getScalarFunctionImplementation(functionRegistry.resolveOperator(IS_DISTINCT_FROM, ImmutableList.of(type, type))).getMethodHandle());
+                    functionManager.getScalarFunctionImplementation(functionManager.resolveOperator(IS_DISTINCT_FROM, fromTypes(type, type))).getMethodHandle());
         }
         distinctFromMethodHandles = distinctFromMethodHandlesBuilder.build();
     }

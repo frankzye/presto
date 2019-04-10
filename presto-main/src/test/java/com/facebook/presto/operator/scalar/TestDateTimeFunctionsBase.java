@@ -26,18 +26,26 @@ import com.facebook.presto.spi.type.TimeZoneKey;
 import com.facebook.presto.spi.type.TimestampType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.TestingConnectorSession;
+import com.facebook.presto.testing.TestingSession;
 import com.facebook.presto.type.SqlIntervalDayTime;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
+import org.joda.time.Hours;
+import org.joda.time.Minutes;
 import org.joda.time.ReadableInstant;
+import org.joda.time.Seconds;
 import org.joda.time.chrono.ISOChronology;
 import org.testng.annotations.Test;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.OffsetTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
@@ -54,25 +62,25 @@ import static com.facebook.presto.spi.type.TimeZoneKey.getTimeZoneKeyForOffset;
 import static com.facebook.presto.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static com.facebook.presto.spi.type.VarcharType.VARCHAR;
 import static com.facebook.presto.spi.type.VarcharType.createVarcharType;
+import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimeOf;
 import static com.facebook.presto.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.facebook.presto.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
 import static com.facebook.presto.util.DateTimeZoneIndex.getDateTimeZone;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
+import static java.time.temporal.ChronoField.MILLI_OF_SECOND;
 import static java.util.Locale.US;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.DAYS;
 import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.joda.time.DateTimeUtils.getInstantChronology;
 import static org.joda.time.Days.daysBetween;
 import static org.joda.time.DurationFieldType.millis;
-import static org.joda.time.Hours.hoursBetween;
-import static org.joda.time.Minutes.minutesBetween;
 import static org.joda.time.Months.monthsBetween;
-import static org.joda.time.Seconds.secondsBetween;
 import static org.joda.time.Weeks.weeksBetween;
 import static org.joda.time.Years.yearsBetween;
 import static org.testng.Assert.assertEquals;
@@ -80,33 +88,36 @@ import static org.testng.Assert.assertEquals;
 public abstract class TestDateTimeFunctionsBase
         extends AbstractTestFunctions
 {
-    protected static final TimeZoneKey TIME_ZONE_KEY = getTimeZoneKey("Asia/Kabul");
+    protected static final TimeZoneKey TIME_ZONE_KEY = TestingSession.DEFAULT_TIME_ZONE_KEY;
     protected static final DateTimeZone DATE_TIME_ZONE = getDateTimeZone(TIME_ZONE_KEY);
     protected static final DateTimeZone UTC_TIME_ZONE = getDateTimeZone(UTC_KEY);
-    protected static final DateTimeZone DATE_TIME_ZONE_NUMERICAL = getDateTimeZone(getTimeZoneKey("+04:30"));
+    protected static final DateTimeZone DATE_TIME_ZONE_NUMERICAL = getDateTimeZone(getTimeZoneKey("-11:00"));
     protected static final TimeZoneKey KATHMANDU_ZONE_KEY = getTimeZoneKey("Asia/Kathmandu");
     protected static final DateTimeZone KATHMANDU_ZONE = getDateTimeZone(KATHMANDU_ZONE_KEY);
-    protected static final TimeZoneKey WEIRD_ZONE_KEY = getTimeZoneKey("+07:09");
-    protected static final DateTimeZone WEIRD_ZONE = getDateTimeZone(WEIRD_ZONE_KEY);
+    protected static final ZoneOffset WEIRD_ZONE = ZoneOffset.ofHoursMinutes(7, 9);
+    protected static final DateTimeZone WEIRD_DATE_TIME_ZONE = DateTimeZone.forID(WEIRD_ZONE.getId());
 
     protected static final DateTime DATE = new DateTime(2001, 8, 22, 0, 0, 0, 0, DateTimeZone.UTC);
     protected static final String DATE_LITERAL = "DATE '2001-08-22'";
     protected static final String DATE_ISO8601_STRING = "2001-08-22";
 
-    protected static final DateTime TIME = new DateTime(1970, 1, 1, 3, 4, 5, 321, DATE_TIME_ZONE);
+    protected static final LocalTime TIME = LocalTime.of(3, 4, 5, 321_000_000);
     protected static final String TIME_LITERAL = "TIME '03:04:05.321'";
-    protected static final DateTime WEIRD_TIME = new DateTime(1970, 1, 1, 3, 4, 5, 321, WEIRD_ZONE);
+    protected static final OffsetTime WEIRD_TIME = OffsetTime.of(3, 4, 5, 321_000_000, WEIRD_ZONE);
     protected static final String WEIRD_TIME_LITERAL = "TIME '03:04:05.321 +07:09'";
 
     protected static final DateTime NEW_TIMESTAMP = new DateTime(2001, 8, 22, 3, 4, 5, 321, UTC_TIME_ZONE); // This is TIMESTAMP w/o TZ
     protected static final DateTime LEGACY_TIMESTAMP = new DateTime(2001, 8, 22, 3, 4, 5, 321, DATE_TIME_ZONE);
     protected static final DateTime TIMESTAMP_WITH_NUMERICAL_ZONE = new DateTime(2001, 8, 22, 3, 4, 5, 321, DATE_TIME_ZONE_NUMERICAL);
     protected static final String TIMESTAMP_LITERAL = "TIMESTAMP '2001-08-22 03:04:05.321'";
-    protected static final String TIMESTAMP_ISO8601_STRING = "2001-08-22T03:04:05.321+04:30";
+    protected static final String TIMESTAMP_ISO8601_STRING = "2001-08-22T03:04:05.321-11:00";
     protected static final String TIMESTAMP_ISO8601_STRING_NO_TIME_ZONE = "2001-08-22T03:04:05.321";
-    protected static final DateTime WEIRD_TIMESTAMP = new DateTime(2001, 8, 22, 3, 4, 5, 321, WEIRD_ZONE);
+    protected static final DateTime WEIRD_TIMESTAMP = new DateTime(2001, 8, 22, 3, 4, 5, 321, WEIRD_DATE_TIME_ZONE);
     protected static final String WEIRD_TIMESTAMP_LITERAL = "TIMESTAMP '2001-08-22 03:04:05.321 +07:09'";
     protected static final String WEIRD_TIMESTAMP_ISO8601_STRING = "2001-08-22T03:04:05.321+07:09";
+
+    protected static final String INTERVAL_LITERAL = "INTERVAL '90061.234' SECOND";
+    protected static final Duration DAY_TO_SECOND_INTERVAL = Duration.ofMillis(90061234);
 
     @SuppressWarnings("MemberName")
     private final DateTime TIMESTAMP;
@@ -116,7 +127,7 @@ public abstract class TestDateTimeFunctionsBase
         super(testSessionBuilder()
                 .setSystemProperty("legacy_timestamp", String.valueOf(legacyTimestamp))
                 .setTimeZoneKey(TIME_ZONE_KEY)
-                .setStartTime(new DateTime(2017, 04, 01, 12, 34, 56, 789, UTC_TIME_ZONE).getMillis())
+                .setStartTime(new DateTime(2017, 4, 1, 12, 34, 56, 789, UTC_TIME_ZONE).getMillis())
                 .build());
         TIMESTAMP = legacyTimestamp ? LEGACY_TIMESTAMP : NEW_TIMESTAMP;
     }
@@ -259,6 +270,7 @@ public abstract class TestDateTimeFunctionsBase
     @Test
     public void testPartFunctions()
     {
+        assertFunction("millisecond(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getMillisOfSecond());
         assertFunction("second(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getSecondOfMinute());
         assertFunction("minute(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getMinuteOfHour());
         assertFunction("hour(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getHourOfDay());
@@ -273,10 +285,13 @@ public abstract class TestDateTimeFunctionsBase
         assertFunction("month(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getMonthOfYear());
         assertFunction("quarter(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getMonthOfYear() / 4 + 1);
         assertFunction("year(" + TIMESTAMP_LITERAL + ")", BIGINT, (long) TIMESTAMP.getYear());
-        assertFunction("timezone_hour(" + TIMESTAMP_LITERAL + ")", BIGINT, 4L);
-        assertFunction("timezone_hour(localtimestamp)", BIGINT, 4L);
-        assertFunction("timezone_hour(current_timestamp)", BIGINT, 4L);
+        assertFunction("timezone_minute(" + TIMESTAMP_LITERAL + ")", BIGINT, 0L);
+        assertFunction("timezone_hour(" + TIMESTAMP_LITERAL + ")", BIGINT, -11L);
 
+        assertFunction("timezone_hour(localtimestamp)", BIGINT, 14L);
+        assertFunction("timezone_hour(current_timestamp)", BIGINT, 14L);
+
+        assertFunction("millisecond(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, (long) WEIRD_TIMESTAMP.getMillisOfSecond());
         assertFunction("second(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, (long) WEIRD_TIMESTAMP.getSecondOfMinute());
         assertFunction("minute(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, (long) WEIRD_TIMESTAMP.getMinuteOfHour());
         assertFunction("hour(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, (long) WEIRD_TIMESTAMP.getHourOfDay());
@@ -293,6 +308,21 @@ public abstract class TestDateTimeFunctionsBase
         assertFunction("year(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, (long) WEIRD_TIMESTAMP.getYear());
         assertFunction("timezone_minute(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, 9L);
         assertFunction("timezone_hour(" + WEIRD_TIMESTAMP_LITERAL + ")", BIGINT, 7L);
+
+        assertFunction("millisecond(" + TIME_LITERAL + ")", BIGINT, TIME.getLong(MILLI_OF_SECOND));
+        assertFunction("second(" + TIME_LITERAL + ")", BIGINT, (long) TIME.getSecond());
+        assertFunction("minute(" + TIME_LITERAL + ")", BIGINT, (long) TIME.getMinute());
+        assertFunction("hour(" + TIME_LITERAL + ")", BIGINT, (long) TIME.getHour());
+
+        assertFunction("millisecond(" + WEIRD_TIME_LITERAL + ")", BIGINT, WEIRD_TIME.getLong(MILLI_OF_SECOND));
+        assertFunction("second(" + WEIRD_TIME_LITERAL + ")", BIGINT, (long) WEIRD_TIME.getSecond());
+        assertFunction("minute(" + WEIRD_TIME_LITERAL + ")", BIGINT, (long) WEIRD_TIME.getMinute());
+        assertFunction("hour(" + WEIRD_TIME_LITERAL + ")", BIGINT, (long) WEIRD_TIME.getHour());
+
+        assertFunction("millisecond(" + INTERVAL_LITERAL + ")", BIGINT, (long) DAY_TO_SECOND_INTERVAL.getNano() / 1_000_000);
+        assertFunction("second(" + INTERVAL_LITERAL + ")", BIGINT, DAY_TO_SECOND_INTERVAL.getSeconds() % 60);
+        assertFunction("minute(" + INTERVAL_LITERAL + ")", BIGINT, DAY_TO_SECOND_INTERVAL.getSeconds() / 60 % 60);
+        assertFunction("hour(" + INTERVAL_LITERAL + ")", BIGINT, DAY_TO_SECOND_INTERVAL.getSeconds() / 3600 % 24);
     }
 
     @Test
@@ -481,24 +511,28 @@ public abstract class TestDateTimeFunctionsBase
     @Test
     public void testTruncateTime()
     {
-        DateTime result = TIME;
-        result = result.withMillisOfSecond(0);
+        LocalTime result = TIME;
+        result = result.withNano(0);
         assertFunction("date_trunc('second', " + TIME_LITERAL + ")", TimeType.TIME, toTime(result));
 
-        result = result.withSecondOfMinute(0);
+        result = result.withSecond(0);
         assertFunction("date_trunc('minute', " + TIME_LITERAL + ")", TimeType.TIME, toTime(result));
 
-        result = result.withMinuteOfHour(0);
+        result = result.withMinute(0);
         assertFunction("date_trunc('hour', " + TIME_LITERAL + ")", TimeType.TIME, toTime(result));
+    }
 
-        result = WEIRD_TIME;
-        result = result.withMillisOfSecond(0);
+    @Test
+    public void testTruncateTimeWithTimeZone()
+    {
+        OffsetTime result = WEIRD_TIME;
+        result = result.withNano(0);
         assertFunction("date_trunc('second', " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(result));
 
-        result = result.withSecondOfMinute(0);
+        result = result.withSecond(0);
         assertFunction("date_trunc('minute', " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(result));
 
-        result = result.withMinuteOfHour(0);
+        result = result.withMinute(0);
         assertFunction("date_trunc('hour', " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(result));
     }
 
@@ -528,6 +562,9 @@ public abstract class TestDateTimeFunctionsBase
         assertFunction("date_add('second', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusSeconds(3), session));
         assertFunction("date_add('minute', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusMinutes(3), session));
         assertFunction("date_add('hour', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusHours(3), session));
+        assertFunction("date_add('hour', 23, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusHours(23), session));
+        assertFunction("date_add('hour', -4, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.minusHours(4), session));
+        assertFunction("date_add('hour', -23, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.minusHours(23), session));
         assertFunction("date_add('day', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusDays(3), session));
         assertFunction("date_add('week', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusWeeks(3), session));
         assertFunction("date_add('month', 3, " + TIMESTAMP_LITERAL + ")", TimestampType.TIMESTAMP, sqlTimestampOf(TIMESTAMP.plusMonths(3), session));
@@ -548,6 +585,7 @@ public abstract class TestDateTimeFunctionsBase
     @Test
     public void testAddFieldToDate()
     {
+        assertFunction("date_add('day', 0, " + DATE_LITERAL + ")", DateType.DATE, toDate(DATE));
         assertFunction("date_add('day', 3, " + DATE_LITERAL + ")", DateType.DATE, toDate(DATE.plusDays(3)));
         assertFunction("date_add('week', 3, " + DATE_LITERAL + ")", DateType.DATE, toDate(DATE.plusWeeks(3)));
         assertFunction("date_add('month', 3, " + DATE_LITERAL + ")", DateType.DATE, toDate(DATE.plusMonths(3)));
@@ -558,12 +596,20 @@ public abstract class TestDateTimeFunctionsBase
     @Test
     public void testAddFieldToTime()
     {
-        assertFunction("date_add('millisecond', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusMillis(3)));
+        assertFunction("date_add('millisecond', 0, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME));
+        assertFunction("date_add('millisecond', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusNanos(3_000_000)));
         assertFunction("date_add('second', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusSeconds(3)));
         assertFunction("date_add('minute', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusMinutes(3)));
         assertFunction("date_add('hour', 3, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusHours(3)));
+        assertFunction("date_add('hour', 23, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.plusHours(23)));
+        assertFunction("date_add('hour', -4, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.minusHours(4)));
+        assertFunction("date_add('hour', -23, " + TIME_LITERAL + ")", TimeType.TIME, toTime(TIME.minusHours(23)));
+    }
 
-        assertFunction("date_add('millisecond', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusMillis(3)));
+    @Test
+    public void testAddFieldToTimeWithTimeZone()
+    {
+        assertFunction("date_add('millisecond', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusNanos(3_000_000)));
         assertFunction("date_add('second', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusSeconds(3)));
         assertFunction("date_add('minute', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusMinutes(3)));
         assertFunction("date_add('hour', 3, " + WEIRD_TIME_LITERAL + ")", TIME_WITH_TIME_ZONE, toTimeWithTimeZone(WEIRD_TIME.plusHours(3)));
@@ -585,7 +631,7 @@ public abstract class TestDateTimeFunctionsBase
         assertFunction("date_diff('quarter', " + baseDateTimeLiteral + ", " + TIMESTAMP_LITERAL + ")", BIGINT, (long) monthsBetween(baseDateTime, TIMESTAMP).getMonths() / 3);
         assertFunction("date_diff('year', " + baseDateTimeLiteral + ", " + TIMESTAMP_LITERAL + ")", BIGINT, (long) yearsBetween(baseDateTime, TIMESTAMP).getYears());
 
-        DateTime weirdBaseDateTime = new DateTime(1960, 5, 3, 7, 2, 9, 678, WEIRD_ZONE);
+        DateTime weirdBaseDateTime = new DateTime(1960, 5, 3, 7, 2, 9, 678, WEIRD_DATE_TIME_ZONE);
         String weirdBaseDateTimeLiteral = "TIMESTAMP '1960-05-03 07:02:09.678 +07:09'";
 
         assertFunction("date_diff('millisecond', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIMESTAMP_LITERAL + ")",
@@ -633,21 +679,25 @@ public abstract class TestDateTimeFunctionsBase
     @Test
     public void testDateDiffTime()
     {
-        DateTime baseDateTime = new DateTime(1970, 1, 1, 7, 2, 9, 678, DATE_TIME_ZONE);
+        LocalTime baseDateTime = LocalTime.of(7, 2, 9, 678_000_000);
         String baseDateTimeLiteral = "TIME '07:02:09.678'";
 
         assertFunction("date_diff('millisecond', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, millisBetween(baseDateTime, TIME));
-        assertFunction("date_diff('second', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, (long) secondsBetween(baseDateTime, TIME).getSeconds());
-        assertFunction("date_diff('minute', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, (long) minutesBetween(baseDateTime, TIME).getMinutes());
-        assertFunction("date_diff('hour', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, (long) hoursBetween(baseDateTime, TIME).getHours());
+        assertFunction("date_diff('second', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, secondsBetween(baseDateTime, TIME));
+        assertFunction("date_diff('minute', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, minutesBetween(baseDateTime, TIME));
+        assertFunction("date_diff('hour', " + baseDateTimeLiteral + ", " + TIME_LITERAL + ")", BIGINT, hoursBetween(baseDateTime, TIME));
+    }
 
-        DateTime weirdBaseDateTime = new DateTime(1970, 1, 1, 7, 2, 9, 678, WEIRD_ZONE);
+    @Test
+    public void testDateDiffTimeWithTimeZone()
+    {
+        OffsetTime weirdBaseDateTime = OffsetTime.of(7, 2, 9, 678_000_000, WEIRD_ZONE);
         String weirdBaseDateTimeLiteral = "TIME '07:02:09.678 +07:09'";
 
         assertFunction("date_diff('millisecond', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, millisBetween(weirdBaseDateTime, WEIRD_TIME));
-        assertFunction("date_diff('second', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, (long) secondsBetween(weirdBaseDateTime, WEIRD_TIME).getSeconds());
-        assertFunction("date_diff('minute', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, (long) minutesBetween(weirdBaseDateTime, WEIRD_TIME).getMinutes());
-        assertFunction("date_diff('hour', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, (long) hoursBetween(weirdBaseDateTime, WEIRD_TIME).getHours());
+        assertFunction("date_diff('second', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, secondsBetween(weirdBaseDateTime, WEIRD_TIME));
+        assertFunction("date_diff('minute', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, minutesBetween(weirdBaseDateTime, WEIRD_TIME));
+        assertFunction("date_diff('hour', " + weirdBaseDateTimeLiteral + ", " + WEIRD_TIME_LITERAL + ")", BIGINT, hoursBetween(weirdBaseDateTime, WEIRD_TIME));
     }
 
     @Test
@@ -707,37 +757,37 @@ public abstract class TestDateTimeFunctionsBase
         assertFunction("date_format(" + dateTimeLiteral + ", '%4')", VARCHAR, "4");
         assertFunction("date_format(" + dateTimeLiteral + ", '%x %v')", VARCHAR, "2001 02");
 
-        String wierdDateTimeLiteral = "TIMESTAMP '2001-01-09 13:04:05.321 +07:09'";
+        String weirdDateTimeLiteral = "TIMESTAMP '2001-01-09 13:04:05.321 +07:09'";
 
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%a')", VARCHAR, "Tue");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%b')", VARCHAR, "Jan");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%c')", VARCHAR, "1");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%d')", VARCHAR, "09");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%e')", VARCHAR, "9");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%f')", VARCHAR, "321000");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%H')", VARCHAR, "13");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%h')", VARCHAR, "01");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%I')", VARCHAR, "01");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%i')", VARCHAR, "04");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%j')", VARCHAR, "009");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%k')", VARCHAR, "13");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%l')", VARCHAR, "1");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%M')", VARCHAR, "January");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%m')", VARCHAR, "01");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%p')", VARCHAR, "PM");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%r')", VARCHAR, "01:04:05 PM");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%S')", VARCHAR, "05");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%s')", VARCHAR, "05");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%T')", VARCHAR, "13:04:05");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%v')", VARCHAR, "02");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%W')", VARCHAR, "Tuesday");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%Y')", VARCHAR, "2001");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%y')", VARCHAR, "01");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%%')", VARCHAR, "%");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", 'foo')", VARCHAR, "foo");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%g')", VARCHAR, "g");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%4')", VARCHAR, "4");
-        assertFunction("date_format(" + wierdDateTimeLiteral + ", '%x %v')", VARCHAR, "2001 02");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%a')", VARCHAR, "Tue");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%b')", VARCHAR, "Jan");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%c')", VARCHAR, "1");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%d')", VARCHAR, "09");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%e')", VARCHAR, "9");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%f')", VARCHAR, "321000");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%H')", VARCHAR, "13");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%h')", VARCHAR, "01");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%I')", VARCHAR, "01");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%i')", VARCHAR, "04");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%j')", VARCHAR, "009");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%k')", VARCHAR, "13");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%l')", VARCHAR, "1");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%M')", VARCHAR, "January");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%m')", VARCHAR, "01");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%p')", VARCHAR, "PM");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%r')", VARCHAR, "01:04:05 PM");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%S')", VARCHAR, "05");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%s')", VARCHAR, "05");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%T')", VARCHAR, "13:04:05");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%v')", VARCHAR, "02");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%W')", VARCHAR, "Tuesday");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%Y')", VARCHAR, "2001");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%y')", VARCHAR, "01");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%%')", VARCHAR, "%");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", 'foo')", VARCHAR, "foo");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%g')", VARCHAR, "g");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%4')", VARCHAR, "4");
+        assertFunction("date_format(" + weirdDateTimeLiteral + ", '%x %v')", VARCHAR, "2001 02");
 
         assertFunction("date_format(TIMESTAMP '2001-01-09 13:04:05.32', '%f')", VARCHAR, "320000");
         assertFunction("date_format(TIMESTAMP '2001-01-09 00:04:05.32', '%k')", VARCHAR, "0");
@@ -755,67 +805,67 @@ public abstract class TestDateTimeFunctionsBase
     {
         assertFunction("date_parse('2013', '%Y')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 1, 1, 0, 0, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 1, 1, 0, 0, 0, 0, session));
         assertFunction("date_parse('2013-05', '%Y-%m')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 1, 0, 0, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 1, 0, 0, 0, 0, session));
         assertFunction("date_parse('2013-05-17', '%Y-%m-%d')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 0, 0, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 0, 0, 0, 0, session));
         assertFunction("date_parse('2013-05-17 12:35:10', '%Y-%m-%d %h:%i:%s')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, session));
         assertFunction("date_parse('2013-05-17 12:35:10 PM', '%Y-%m-%d %h:%i:%s %p')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 12, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 12, 35, 10, 0, session));
         assertFunction("date_parse('2013-05-17 12:35:10 AM', '%Y-%m-%d %h:%i:%s %p')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, session));
 
         assertFunction("date_parse('2013-05-17 00:35:10', '%Y-%m-%d %H:%i:%s')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, session));
         assertFunction("date_parse('2013-05-17 23:35:10', '%Y-%m-%d %H:%i:%s')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 23, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 23, 35, 10, 0, session));
         assertFunction("date_parse('abc 2013-05-17 fff 23:35:10 xyz', 'abc %Y-%m-%d fff %H:%i:%s xyz')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2013, 5, 17, 23, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2013, 5, 17, 23, 35, 10, 0, session));
 
         assertFunction("date_parse('2013 14', '%Y %y')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2014, 1, 1, 0, 0, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2014, 1, 1, 0, 0, 0, 0, session));
 
         assertFunction("date_parse('1998 53', '%x %v')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1998, 12, 28, 0, 0, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1998, 12, 28, 0, 0, 0, 0, session));
 
         assertFunction("date_parse('1.1', '%s.%f')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1970, 1, 1, 0, 0, 1, 100, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 1, 1, 0, 0, 1, 100, session));
         assertFunction("date_parse('1.01', '%s.%f')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1970, 1, 1, 0, 0, 1, 10, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 1, 1, 0, 0, 1, 10, session));
         assertFunction("date_parse('1.2006', '%s.%f')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1970, 1, 1, 0, 0, 1, 200, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 1, 1, 0, 0, 1, 200, session));
         assertFunction("date_parse('59.123456789', '%s.%f')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1970, 1, 1, 0, 0, 59, 123, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 1, 1, 0, 0, 59, 123, session));
 
         assertFunction("date_parse('0', '%k')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1970, 1, 1, 0, 0, 0, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 1, 1, 0, 0, 0, 0, session));
 
         assertFunction("date_parse('28-JAN-16 11.45.46.421000 PM','%d-%b-%y %l.%i.%s.%f %p')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2016, 1, 28, 23, 45, 46, 421, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2016, 1, 28, 23, 45, 46, 421, session));
         assertFunction("date_parse('11-DEC-70 11.12.13.456000 AM','%d-%b-%y %l.%i.%s.%f %p')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(1970, 12, 11, 11, 12, 13, 456, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(1970, 12, 11, 11, 12, 13, 456, session));
         assertFunction("date_parse('31-MAY-69 04.59.59.999000 AM','%d-%b-%y %l.%i.%s.%f %p')",
                 TimestampType.TIMESTAMP,
-                sqlTimestampOf(2069, 5, 31, 4, 59, 59, 999, DATE_TIME_ZONE, TIME_ZONE_KEY, session));
+                sqlTimestampOf(2069, 5, 31, 4, 59, 59, 999, session));
 
         assertInvalidFunction("date_parse('', '%D')", "%D not supported in date format string");
         assertInvalidFunction("date_parse('', '%U')", "%U not supported in date format string");
@@ -832,7 +882,7 @@ public abstract class TestDateTimeFunctionsBase
     public void testLocale()
     {
         Locale locale = Locale.KOREAN;
-        Session localeSession = testSessionBuilder()
+        Session localeSession = Session.builder(this.session)
                 .setTimeZoneKey(TIME_ZONE_KEY)
                 .setLocale(locale)
                 .build();
@@ -855,10 +905,10 @@ public abstract class TestDateTimeFunctionsBase
 
             localeAssertions.assertFunction("date_parse('2013-05-17 12:35:10 오후', '%Y-%m-%d %h:%i:%s %p')",
                     TimestampType.TIMESTAMP,
-                    sqlTimestampOf(2013, 5, 17, 12, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, localeSession));
+                    sqlTimestampOf(2013, 5, 17, 12, 35, 10, 0, localeSession));
             localeAssertions.assertFunction("date_parse('2013-05-17 12:35:10 오전', '%Y-%m-%d %h:%i:%s %p')",
                     TimestampType.TIMESTAMP,
-                    sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE, TIME_ZONE_KEY, localeSession));
+                    sqlTimestampOf(2013, 5, 17, 0, 35, 10, 0, localeSession));
 
             localeAssertions.assertFunction("parse_datetime('2013-05-17 12:35:10 오후', 'yyyy-MM-dd hh:mm:ss a')",
                     TIMESTAMP_WITH_TIME_ZONE,
@@ -866,8 +916,6 @@ public abstract class TestDateTimeFunctionsBase
             localeAssertions.assertFunction("parse_datetime('2013-05-17 12:35:10 오전', 'yyyy-MM-dd hh:mm:ss aaa')",
                     TIMESTAMP_WITH_TIME_ZONE,
                     toTimestampWithTimeZone(new DateTime(2013, 5, 17, 0, 35, 10, 0, DATE_TIME_ZONE)));
-
-            localeAssertions.close();
         }
     }
 
@@ -914,7 +962,7 @@ public abstract class TestDateTimeFunctionsBase
         // but our test framework doesn't support that syntax directly.
 
         Session oldKathmanduTimeZoneOffsetSession =
-                testSessionBuilder()
+                Session.builder(this.session)
                         .setTimeZoneKey(TIME_ZONE_KEY)
                         .setStartTime(new DateTime(1980, 1, 1, 10, 0, 0, DATE_TIME_ZONE).getMillis())
                         .build();
@@ -922,7 +970,7 @@ public abstract class TestDateTimeFunctionsBase
         TimeZoneKey europeWarsawTimeZoneKey = getTimeZoneKey("Europe/Warsaw");
         DateTimeZone europeWarsawTimeZone = getDateTimeZone(europeWarsawTimeZoneKey);
         Session europeWarsawSessionWinter =
-                testSessionBuilder()
+                Session.builder(this.session)
                         .setTimeZoneKey(europeWarsawTimeZoneKey)
                         .setStartTime(new DateTime(2017, 1, 1, 10, 0, 0, europeWarsawTimeZone).getMillis())
                         .build();
@@ -1001,10 +1049,11 @@ public abstract class TestDateTimeFunctionsBase
                     TIME_WITH_TIME_ZONE,
                     new SqlTimeWithTimeZone(new DateTime(1970, 1, 1, 4, 15, 0, 0, UTC_TIME_ZONE).getMillis(), TimeZoneKey.UTC_KEY));
 
-            // Noop on Asia/Kabul
+            // Noop when time zone doesn't change
+            TimeZoneKey kabul = TimeZoneKey.getTimeZoneKey("Asia/Kabul");
             assertFunction("at_timezone(TIME '10:00 Asia/Kabul', 'Asia/Kabul')",
                     TIME_WITH_TIME_ZONE,
-                    new SqlTimeWithTimeZone(new DateTime(1970, 1, 1, 10, 0, 0, 0, DATE_TIME_ZONE).getMillis(), TIME_ZONE_KEY));
+                    new SqlTimeWithTimeZone(new DateTime(1970, 1, 1, 10, 0, 0, 0, getDateTimeZone(kabul)).getMillis(), kabul));
 
             // This test checks if the TZ offset isn't calculated on other fixed point in time by checking if
             // session started in 1980 would get historical Asia/Kathmandu offset.
@@ -1024,6 +1073,7 @@ public abstract class TestDateTimeFunctionsBase
         }
     }
 
+    @Test
     public void testParseDuration()
     {
         assertFunction("parse_duration('1234 ns')", INTERVAL_DAY_TIME, new SqlIntervalDayTime(0, 0, 0, 0, 0));
@@ -1089,29 +1139,76 @@ public abstract class TestDateTimeFunctionsBase
         return millis().getField(getInstantChronology(start)).getDifferenceAsLong(end.getMillis(), start.getMillis());
     }
 
-    private SqlTime toTime(long milliseconds)
+    private static Seconds secondsBetween(ReadableInstant start, ReadableInstant end)
     {
-        if (isLegacyTimestamp(session)) {
-            return new SqlTime(milliseconds, session.getTimeZoneKey());
-        }
-        else {
-            return new SqlTime(milliseconds);
-        }
+        return Seconds.secondsBetween(start, end);
     }
 
-    private SqlTime toTime(DateTime dateTime)
+    private static Minutes minutesBetween(ReadableInstant start, ReadableInstant end)
     {
-        if (isLegacyTimestamp(session)) {
-            return new SqlTime(dateTime.getMillis(), session.getTimeZoneKey());
-        }
-        else {
-            return new SqlTime(dateTime.getMillisOfDay());
-        }
+        return Minutes.minutesBetween(start, end);
     }
 
-    private static SqlTimeWithTimeZone toTimeWithTimeZone(DateTime dateTime)
+    private static Hours hoursBetween(ReadableInstant start, ReadableInstant end)
     {
-        return new SqlTimeWithTimeZone(dateTime.getMillis(), dateTime.getZone().toTimeZone());
+        return Hours.hoursBetween(start, end);
+    }
+
+    private static long millisBetween(LocalTime start, LocalTime end)
+    {
+        return NANOSECONDS.toMillis(end.toNanoOfDay() - start.toNanoOfDay());
+    }
+
+    private static long secondsBetween(LocalTime start, LocalTime end)
+    {
+        return NANOSECONDS.toSeconds(end.toNanoOfDay() - start.toNanoOfDay());
+    }
+
+    private static long minutesBetween(LocalTime start, LocalTime end)
+    {
+        return NANOSECONDS.toMinutes(end.toNanoOfDay() - start.toNanoOfDay());
+    }
+
+    private static long hoursBetween(LocalTime start, LocalTime end)
+    {
+        return NANOSECONDS.toHours(end.toNanoOfDay() - start.toNanoOfDay());
+    }
+
+    private static long millisBetween(OffsetTime start, OffsetTime end)
+    {
+        return millisUtc(end) - millisUtc(start);
+    }
+
+    private static long secondsBetween(OffsetTime start, OffsetTime end)
+    {
+        return MILLISECONDS.toSeconds(millisBetween(start, end));
+    }
+
+    private static long minutesBetween(OffsetTime start, OffsetTime end)
+    {
+        return MILLISECONDS.toMinutes(millisBetween(start, end));
+    }
+
+    private static long hoursBetween(OffsetTime start, OffsetTime end)
+    {
+        return MILLISECONDS.toHours(millisBetween(start, end));
+    }
+
+    private SqlTime toTime(LocalTime time)
+    {
+        return sqlTimeOf(time, session);
+    }
+
+    private static SqlTimeWithTimeZone toTimeWithTimeZone(OffsetTime offsetTime)
+    {
+        return new SqlTimeWithTimeZone(
+                millisUtc(offsetTime),
+                TimeZoneKey.getTimeZoneKey(offsetTime.getOffset().getId()));
+    }
+
+    private static long millisUtc(OffsetTime offsetTime)
+    {
+        return offsetTime.atDate(LocalDate.ofEpochDay(0)).toInstant().toEpochMilli();
     }
 
     private static SqlTimestampWithTimeZone toTimestampWithTimeZone(DateTime dateTime)

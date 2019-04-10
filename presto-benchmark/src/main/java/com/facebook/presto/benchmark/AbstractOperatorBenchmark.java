@@ -17,8 +17,9 @@ import com.facebook.presto.Session;
 import com.facebook.presto.execution.Lifespan;
 import com.facebook.presto.execution.TaskId;
 import com.facebook.presto.execution.TaskStateMachine;
-import com.facebook.presto.memory.DefaultQueryContext;
+import com.facebook.presto.execution.warnings.WarningCollector;
 import com.facebook.presto.memory.MemoryPool;
+import com.facebook.presto.memory.QueryContext;
 import com.facebook.presto.metadata.Metadata;
 import com.facebook.presto.metadata.QualifiedObjectName;
 import com.facebook.presto.metadata.Split;
@@ -35,7 +36,6 @@ import com.facebook.presto.operator.PageSourceOperator;
 import com.facebook.presto.operator.TaskContext;
 import com.facebook.presto.operator.TaskStats;
 import com.facebook.presto.operator.project.InputPageProjection;
-import com.facebook.presto.operator.project.InterpretedPageProjection;
 import com.facebook.presto.operator.project.PageProcessor;
 import com.facebook.presto.operator.project.PageProjection;
 import com.facebook.presto.security.AllowAllAccessControl;
@@ -44,13 +44,17 @@ import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Constraint;
 import com.facebook.presto.spi.QueryId;
 import com.facebook.presto.spi.memory.MemoryPoolId;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spiller.SpillSpaceTracker;
 import com.facebook.presto.split.SplitSource;
+import com.facebook.presto.sql.gen.PageFunctionCompiler;
 import com.facebook.presto.sql.planner.Symbol;
+import com.facebook.presto.sql.planner.TypeProvider;
 import com.facebook.presto.sql.planner.optimizations.HashGenerationOptimizer;
 import com.facebook.presto.sql.planner.plan.PlanNodeId;
 import com.facebook.presto.sql.tree.Expression;
+import com.facebook.presto.sql.tree.NodeRef;
 import com.facebook.presto.testing.LocalQueryRunner;
 import com.facebook.presto.transaction.TransactionId;
 import com.google.common.collect.ImmutableList;
@@ -72,6 +76,8 @@ import static com.facebook.presto.SystemSessionProperties.getFilterAndProjectMin
 import static com.facebook.presto.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy.UNGROUPED_SCHEDULING;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
+import static com.facebook.presto.sql.analyzer.ExpressionAnalyzer.getExpressionTypes;
+import static com.facebook.presto.sql.relational.SqlToRowExpressionTranslator.translate;
 import static com.facebook.presto.testing.TestingSession.testSessionBuilder;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -225,13 +231,18 @@ public abstract class AbstractOperatorBenchmark
 
         Optional<Expression> hashExpression = HashGenerationOptimizer.getHashExpression(ImmutableList.copyOf(symbolTypes.build().keySet()));
         verify(hashExpression.isPresent());
-        projections.add(new InterpretedPageProjection(
-                hashExpression.get(),
-                symbolTypes.build(),
-                symbolToInputMapping.build(),
+        Map<NodeRef<Expression>, Type> expressionTypes = getExpressionTypes(
+                session,
                 localQueryRunner.getMetadata(),
                 localQueryRunner.getSqlParser(),
-                session));
+                TypeProvider.copyOf(symbolTypes.build()),
+                hashExpression.get(),
+                ImmutableList.of(),
+                WarningCollector.NOOP);
+        RowExpression translated = translate(hashExpression.get(), expressionTypes, symbolToInputMapping.build(), localQueryRunner.getMetadata().getFunctionManager(), localQueryRunner.getTypeManager(), session, false);
+
+        PageFunctionCompiler functionCompiler = new PageFunctionCompiler(localQueryRunner.getMetadata(), 0);
+        projections.add(functionCompiler.compileProjection(translated, Optional.empty()).get());
 
         return new FilterAndProjectOperator.FilterAndProjectOperatorFactory(
                 operatorId,
@@ -277,7 +288,7 @@ public abstract class AbstractOperatorBenchmark
         MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
         SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(new DataSize(1, GIGABYTE));
 
-        TaskContext taskContext = new DefaultQueryContext(
+        TaskContext taskContext = new QueryContext(
                 new QueryId("test"),
                 new DataSize(256, MEGABYTE),
                 new DataSize(512, MEGABYTE),
@@ -291,7 +302,8 @@ public abstract class AbstractOperatorBenchmark
                         session,
                         false,
                         false,
-                        OptionalInt.empty());
+                        OptionalInt.empty(),
+                        false);
 
         CpuTimer cpuTimer = new CpuTimer();
         Map<String, Long> executionStats = execute(taskContext);

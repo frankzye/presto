@@ -55,7 +55,7 @@ public class SingleRowBlock
     {
         long sizeInBytes = 0;
         for (int i = 0; i < fieldBlocks.length; i++) {
-            sizeInBytes += getRawFieldBlock(i).getSizeInBytes();
+            sizeInBytes += getRawFieldBlock(i).getRegionSizeInBytes(rowIndex, 1);
         }
         return sizeInBytes;
     }
@@ -73,8 +73,8 @@ public class SingleRowBlock
     @Override
     public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
     {
-        for (int i = 0; i < fieldBlocks.length; i++) {
-            consumer.accept(fieldBlocks[i], fieldBlocks[i].getRetainedSizeInBytes());
+        for (Block fieldBlock : fieldBlocks) {
+            consumer.accept(fieldBlock, fieldBlock.getRetainedSizeInBytes());
         }
         consumer.accept(this, (long) INSTANCE_SIZE);
     }
@@ -94,5 +94,24 @@ public class SingleRowBlock
     public String toString()
     {
         return format("SingleRowBlock{numFields=%d}", fieldBlocks.length);
+    }
+
+    @Override
+    public Block getLoadedBlock()
+    {
+        boolean allLoaded = true;
+        Block[] loadedFieldBlocks = new Block[fieldBlocks.length];
+
+        for (int i = 0; i < fieldBlocks.length; i++) {
+            loadedFieldBlocks[i] = fieldBlocks[i].getLoadedBlock();
+            if (loadedFieldBlocks[i] != fieldBlocks[i]) {
+                allLoaded = false;
+            }
+        }
+
+        if (allLoaded) {
+            return this;
+        }
+        return new SingleRowBlock(rowIndex, loadedFieldBlocks);
     }
 }

@@ -30,13 +30,6 @@ public final class ColumnarRow
         if (block instanceof RunLengthEncodedBlock) {
             return toColumnarRow((RunLengthEncodedBlock) block);
         }
-        if (block instanceof LazyBlock) {
-            LazyBlock lazyBlock = (LazyBlock) block;
-            if (!lazyBlock.isLoaded()) {
-                throw new IllegalArgumentException("LazyBlock is expected to be loaded");
-            }
-            return toColumnarRow(lazyBlock.getBlock());
-        }
 
         if (!(block instanceof AbstractRowBlock)) {
             throw new IllegalArgumentException("Invalid row block: " + block.getClass().getName());
@@ -132,7 +125,7 @@ public final class ColumnarRow
 
     /**
      * Gets the specified field for all rows as a column.
-     *
+     * <p>
      * Note: A null row will not have an entry in the block, so the block
      * will be the size of the non-null rows.  This block may still contain
      * null values when the row is non-null but the field value is null.

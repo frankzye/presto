@@ -514,7 +514,7 @@ public class HivePageSource
                 valueIsNull[i] = arrayBlock.isNull(i);
                 offsets[i + 1] = offsets[i] + arrayBlock.getLength(i);
             }
-            return ArrayBlock.fromElementBlock(arrayBlock.getPositionCount(), valueIsNull, offsets, elementsBlock);
+            return ArrayBlock.fromElementBlock(arrayBlock.getPositionCount(), Optional.of(valueIsNull), offsets, elementsBlock);
         }
     }
 
@@ -550,7 +550,7 @@ public class HivePageSource
                 valueIsNull[i] = mapBlock.isNull(i);
                 offsets[i + 1] = offsets[i] + mapBlock.getEntryCount(i);
             }
-            return ((MapType) toType).createBlockFromKeyValue(valueIsNull, offsets, keysBlock, valuesBlock);
+            return ((MapType) toType).createBlockFromKeyValue(Optional.of(valueIsNull), offsets, keysBlock, valuesBlock);
         }
     }
 
@@ -600,7 +600,7 @@ public class HivePageSource
             for (int i = 0; i < rowBlock.getPositionCount(); i++) {
                 valueIsNull[i] = rowBlock.isNull(i);
             }
-            return RowBlock.fromFieldBlocks(valueIsNull, fields);
+            return RowBlock.fromFieldBlocks(valueIsNull.length, Optional.of(valueIsNull), fields);
         }
     }
 
@@ -623,10 +623,7 @@ public class HivePageSource
                 return;
             }
 
-            if (block instanceof LazyBlock) {
-                block = ((LazyBlock) block).getBlock();
-            }
-            lazyBlock.setBlock(coercer.apply(block));
+            lazyBlock.setBlock(coercer.apply(block.getLoadedBlock()));
 
             // clear reference to loader to free resources, since load was successful
             block = null;
@@ -652,9 +649,6 @@ public class HivePageSource
                 return;
             }
 
-            if (block instanceof LazyBlock) {
-                block = ((LazyBlock) block).getBlock();
-            }
             lazyBlock.setBlock(block.getPositions(rowsToKeep.elements(), 0, rowsToKeep.size()));
 
             // clear reference to loader to free resources, since load was successful

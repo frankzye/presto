@@ -24,13 +24,13 @@ public class LocationHandle
 {
     private final Path targetPath;
     private final Path writePath;
-    private final boolean isExistingTable;
+    private final TableType tableType;
     private final WriteMode writeMode;
 
     public LocationHandle(
             Path targetPath,
             Path writePath,
-            boolean isExistingTable,
+            TableType tableType,
             WriteMode writeMode)
     {
         if (writeMode.isWritePathSameAsTargetPath() && !targetPath.equals(writePath)) {
@@ -38,7 +38,7 @@ public class LocationHandle
         }
         this.targetPath = requireNonNull(targetPath, "targetPath is null");
         this.writePath = requireNonNull(writePath, "writePath is null");
-        this.isExistingTable = isExistingTable;
+        this.tableType = requireNonNull(tableType, "tableType is null");
         this.writeMode = requireNonNull(writeMode, "writeMode is null");
     }
 
@@ -46,13 +46,13 @@ public class LocationHandle
     public LocationHandle(
             @JsonProperty("targetPath") String targetPath,
             @JsonProperty("writePath") String writePath,
-            @JsonProperty("isExistingTable") boolean isExistingTable,
+            @JsonProperty("tableType") TableType tableType,
             @JsonProperty("writeMode") WriteMode writeMode)
     {
         this(
                 new Path(requireNonNull(targetPath, "targetPath is null")),
                 new Path(requireNonNull(writePath, "writePath is null")),
-                isExistingTable,
+                tableType,
                 writeMode);
     }
 
@@ -75,9 +75,9 @@ public class LocationHandle
     }
 
     // This method should only be called by LocationService
-    boolean isExistingTable()
+    TableType getTableType()
     {
-        return isExistingTable;
+        return tableType;
     }
 
     @JsonProperty("targetPath")
@@ -92,10 +92,10 @@ public class LocationHandle
         return writePath.toString();
     }
 
-    @JsonProperty("isExistingTable")
-    public boolean getJsonSerializableIsExistingTable()
+    @JsonProperty("tableType")
+    public TableType getJsonSerializableTableType()
     {
-        return isExistingTable;
+        return tableType;
     }
 
     @JsonProperty("writeMode")
@@ -107,15 +107,15 @@ public class LocationHandle
     public enum WriteMode
     {
         /**
-         * common mode for new table or existing table (both new and existing partition)
+         * common mode for new table or existing table (both new and existing partition) and when staging directory is enabled
          */
         STAGE_AND_MOVE_TO_TARGET_DIRECTORY(false),
         /**
-         * for new table in S3
+         * for new table in S3 or when staging directory is disabled
          */
         DIRECT_TO_TARGET_NEW_DIRECTORY(true),
         /**
-         * for existing table in S3 (both new and existing partition)
+         * for existing table in S3 (both new and existing partition) or when staging directory is disabled
          */
         DIRECT_TO_TARGET_EXISTING_DIRECTORY(true),
         /**/;
@@ -142,5 +142,12 @@ public class LocationHandle
         {
             return writePathSameAsTargetPath;
         }
+    }
+
+    public enum TableType
+    {
+        NEW,
+        EXISTING,
+        TEMPORARY,
     }
 }

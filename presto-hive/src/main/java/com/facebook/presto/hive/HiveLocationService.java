@@ -14,6 +14,7 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.HdfsEnvironment.HdfsContext;
+import com.facebook.presto.hive.LocationHandle.TableType;
 import com.facebook.presto.hive.LocationHandle.WriteMode;
 import com.facebook.presto.hive.metastore.Partition;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
@@ -27,15 +28,20 @@ import javax.inject.Inject;
 import java.util.Optional;
 
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_PATH_ALREADY_EXISTS;
+import static com.facebook.presto.hive.HiveSessionProperties.isTemporaryStagingDirectoryEnabled;
 import static com.facebook.presto.hive.HiveWriteUtils.createTemporaryPath;
 import static com.facebook.presto.hive.HiveWriteUtils.getTableDefaultLocation;
 import static com.facebook.presto.hive.HiveWriteUtils.isS3FileSystem;
 import static com.facebook.presto.hive.HiveWriteUtils.pathExists;
+import static com.facebook.presto.hive.LocationHandle.TableType.EXISTING;
+import static com.facebook.presto.hive.LocationHandle.TableType.NEW;
+import static com.facebook.presto.hive.LocationHandle.TableType.TEMPORARY;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.DIRECT_TO_TARGET_EXISTING_DIRECTORY;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.DIRECT_TO_TARGET_NEW_DIRECTORY;
 import static com.facebook.presto.hive.LocationHandle.WriteMode.STAGE_AND_MOVE_TO_TARGET_DIRECTORY;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.UUID.randomUUID;
 
 public class HiveLocationService
         implements LocationService
@@ -58,14 +64,7 @@ public class HiveLocationService
         if (pathExists(context, hdfsEnvironment, targetPath)) {
             throw new PrestoException(HIVE_PATH_ALREADY_EXISTS, format("Target directory for table '%s.%s' already exists: %s", schemaName, tableName, targetPath));
         }
-
-        if (shouldUseTemporaryDirectory(context, targetPath)) {
-            Path writePath = createTemporaryPath(context, hdfsEnvironment, targetPath);
-            return new LocationHandle(targetPath, writePath, false, STAGE_AND_MOVE_TO_TARGET_DIRECTORY);
-        }
-        else {
-            return new LocationHandle(targetPath, targetPath, false, DIRECT_TO_TARGET_NEW_DIRECTORY);
-        }
+        return createLocationHandle(context, session, targetPath, NEW);
     }
 
     @Override
@@ -73,20 +72,36 @@ public class HiveLocationService
     {
         HdfsContext context = new HdfsContext(session, table.getDatabaseName(), table.getTableName());
         Path targetPath = new Path(table.getStorage().getLocation());
-
-        if (shouldUseTemporaryDirectory(context, targetPath)) {
-            Path writePath = createTemporaryPath(context, hdfsEnvironment, targetPath);
-            return new LocationHandle(targetPath, writePath, true, STAGE_AND_MOVE_TO_TARGET_DIRECTORY);
-        }
-        else {
-            return new LocationHandle(targetPath, targetPath, true, DIRECT_TO_TARGET_EXISTING_DIRECTORY);
-        }
+        return createLocationHandle(context, session, targetPath, EXISTING);
     }
 
-    private boolean shouldUseTemporaryDirectory(HdfsContext context, Path path)
+    @Override
+    public LocationHandle forTemporaryTable(SemiTransactionalHiveMetastore metastore, ConnectorSession session, Table table)
     {
-        // skip using temporary directory for S3
-        return !isS3FileSystem(context, hdfsEnvironment, path);
+        String schemaName = table.getDatabaseName();
+        String tableName = table.getTableName();
+        HdfsContext context = new HdfsContext(session, schemaName, tableName);
+        Path targetPath = new Path(getTableDefaultLocation(context, metastore, hdfsEnvironment, schemaName, tableName), randomUUID().toString().replaceAll("-", "_"));
+        return new LocationHandle(targetPath, targetPath, TEMPORARY, DIRECT_TO_TARGET_NEW_DIRECTORY);
+    }
+
+    private LocationHandle createLocationHandle(HdfsContext context, ConnectorSession session, Path targetPath, TableType tableType)
+    {
+        if (shouldUseTemporaryDirectory(session, context, targetPath)) {
+            Path writePath = createTemporaryPath(session, context, hdfsEnvironment, targetPath);
+            return new LocationHandle(targetPath, writePath, tableType, STAGE_AND_MOVE_TO_TARGET_DIRECTORY);
+        }
+        if (tableType.equals(EXISTING)) {
+            return new LocationHandle(targetPath, targetPath, tableType, DIRECT_TO_TARGET_EXISTING_DIRECTORY);
+        }
+        return new LocationHandle(targetPath, targetPath, tableType, DIRECT_TO_TARGET_NEW_DIRECTORY);
+    }
+
+    private boolean shouldUseTemporaryDirectory(ConnectorSession session, HdfsContext context, Path path)
+    {
+        return isTemporaryStagingDirectoryEnabled(session)
+                // skip using temporary directory for S3
+                && !isS3FileSystem(context, hdfsEnvironment, path);
     }
 
     @Override

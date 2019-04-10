@@ -178,10 +178,24 @@ public class LazyBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        assureLoaded();
+        return block.getPositionsSizeInBytes(positions);
+    }
+
+    @Override
     public long getRetainedSizeInBytes()
     {
         assureLoaded();
         return INSTANCE_SIZE + block.getRetainedSizeInBytes();
+    }
+
+    @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        assureLoaded();
+        return block.getEstimatedDataSizeForStats(position);
     }
 
     @Override
@@ -234,12 +248,6 @@ public class LazyBlock
         return block.isNull(position);
     }
 
-    public Block getBlock()
-    {
-        assureLoaded();
-        return block;
-    }
-
     public void setBlock(Block block)
     {
         if (this.block != null) {
@@ -254,7 +262,13 @@ public class LazyBlock
     }
 
     @Override
-    public void assureLoaded()
+    public Block getLoadedBlock()
+    {
+        assureLoaded();
+        return block;
+    }
+
+    private void assureLoaded()
     {
         if (block != null) {
             return;

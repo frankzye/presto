@@ -62,6 +62,12 @@ public class GroupByIdBlock
     }
 
     @Override
+    public long getPositionsSizeInBytes(boolean[] positions)
+    {
+        return block.getPositionsSizeInBytes(positions);
+    }
+
+    @Override
     public Block copyRegion(int positionOffset, int length)
     {
         return block.copyRegion(positionOffset, length);
@@ -182,6 +188,12 @@ public class GroupByIdBlock
     }
 
     @Override
+    public long getEstimatedDataSizeForStats(int position)
+    {
+        return block.getEstimatedDataSizeForStats(position);
+    }
+
+    @Override
     public void retainedBytesForEachPart(BiConsumer<Object, Long> consumer)
     {
         consumer.accept(block, block.getRetainedSizeInBytes());
@@ -201,16 +213,17 @@ public class GroupByIdBlock
     }
 
     @Override
-    public void assureLoaded()
-    {
-    }
-
-    @Override
     public String toString()
     {
         return toStringHelper(this)
                 .add("groupCount", groupCount)
                 .add("positionCount", getPositionCount())
                 .toString();
+    }
+
+    @Override
+    public Block getLoadedBlock()
+    {
+        return block.getLoadedBlock();
     }
 }

@@ -16,6 +16,7 @@ package com.facebook.presto.jdbc;
 import com.facebook.presto.client.ClientException;
 import com.facebook.presto.client.QueryStatusInfo;
 import com.facebook.presto.client.StatementClient;
+import com.facebook.presto.spi.security.SelectedRole;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.primitives.Ints;
 
@@ -48,6 +49,7 @@ public class PrestoStatement
     private final AtomicReference<PrestoConnection> connection;
     private final AtomicReference<StatementClient> executingClient = new AtomicReference<>();
     private final AtomicReference<PrestoResultSet> currentResult = new AtomicReference<>();
+    private final AtomicReference<Optional<WarningsManager>> currentWarningsManager = new AtomicReference<>(Optional.empty());
     private final AtomicLong currentUpdateCount = new AtomicLong(-1);
     private final AtomicReference<String> currentUpdateType = new AtomicReference<>();
     private final AtomicReference<Optional<Consumer<QueryStats>>> progressCallback = new AtomicReference<>(Optional.empty());
@@ -188,7 +190,7 @@ public class PrestoStatement
             throws SQLException
     {
         checkOpen();
-        return null;
+        return currentWarningsManager.get().map(WarningsManager::getWarnings).orElse(null);
     }
 
     @Override
@@ -196,6 +198,7 @@ public class PrestoStatement
             throws SQLException
     {
         checkOpen();
+        currentWarningsManager.get().ifPresent(WarningsManager::clearWarnings);
     }
 
     @Override
@@ -242,8 +245,13 @@ public class PrestoStatement
                 }
             }
             executingClient.set(client);
+            WarningsManager warningsManager = new WarningsManager();
+            currentWarningsManager.set(Optional.of(warningsManager));
+            resultSet = new PrestoResultSet(client, maxRows.get(), progressConsumer, warningsManager);
 
-            resultSet = new PrestoResultSet(client, maxRows.get(), progressConsumer);
+            for (Map.Entry<String, SelectedRole> entry : client.getSetRoles().entrySet()) {
+                connection.get().setRole(entry.getKey(), entry.getValue());
+            }
 
             // check if this is a query
             if (client.currentStatusInfo().getUpdateType() == null) {
@@ -261,7 +269,7 @@ public class PrestoStatement
             Long updateCount = client.finalStatusInfo().getUpdateCount();
             currentUpdateCount.set((updateCount != null) ? updateCount : 0);
             currentUpdateType.set(client.finalStatusInfo().getUpdateType());
-
+            warningsManager.addWarnings(client.finalStatusInfo().getWarnings());
             return false;
         }
         catch (ClientException e) {
@@ -288,6 +296,7 @@ public class PrestoStatement
         currentResult.set(null);
         currentUpdateCount.set(-1);
         currentUpdateType.set(null);
+        currentWarningsManager.set(Optional.empty());
     }
 
     @Override
@@ -317,9 +326,7 @@ public class PrestoStatement
     public boolean getMoreResults()
             throws SQLException
     {
-        checkOpen();
-        closeResultSet();
-        return false;
+        return getMoreResults(CLOSE_CURRENT_RESULT);
     }
 
     @Override
@@ -412,6 +419,9 @@ public class PrestoStatement
             throws SQLException
     {
         checkOpen();
+
+        currentUpdateCount.set(-1);
+        currentUpdateType.set(null);
 
         if (current == CLOSE_CURRENT_RESULT) {
             closeResultSet();

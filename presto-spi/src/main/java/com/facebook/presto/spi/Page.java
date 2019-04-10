@@ -40,6 +40,7 @@ public class Page
     private final int positionCount;
     private final AtomicLong sizeInBytes = new AtomicLong(-1);
     private final AtomicLong retainedSizeInBytes = new AtomicLong(-1);
+    private final AtomicLong logicalSizeInBytes = new AtomicLong(-1);
 
     public Page(Block... blocks)
     {
@@ -74,6 +75,19 @@ public class Page
             this.sizeInBytes.set(sizeInBytes);
         }
         return sizeInBytes;
+    }
+
+    public long getLogicalSizeInBytes()
+    {
+        long size = logicalSizeInBytes.get();
+        if (size < 0) {
+            size = 0;
+            for (Block block : blocks) {
+                size += block.getLogicalSizeInBytes();
+            }
+            logicalSizeInBytes.set(size);
+        }
+        return size;
     }
 
     public long getRetainedSizeInBytes()
@@ -233,16 +247,28 @@ public class Page
     }
 
     /**
-     * Assures that all data for the block is in memory.
+     * Returns a page that assures all data is in memory.
+     * May return the same page if all page data is already in memory.
      * <p>
      * This allows streaming data sources to skip sections that are not
      * accessed in a query.
      */
-    public void assureLoaded()
+    public Page getLoadedPage()
     {
-        for (Block block : blocks) {
-            block.assureLoaded();
+        boolean allLoaded = true;
+        Block[] loadedBlocks = new Block[blocks.length];
+        for (int i = 0; i < blocks.length; i++) {
+            loadedBlocks[i] = blocks[i].getLoadedBlock();
+            if (loadedBlocks[i] != blocks[i]) {
+                allLoaded = false;
+            }
         }
+
+        if (allLoaded) {
+            return this;
+        }
+
+        return new Page(loadedBlocks);
     }
 
     @Override

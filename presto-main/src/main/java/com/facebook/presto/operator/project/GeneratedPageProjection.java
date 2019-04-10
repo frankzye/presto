@@ -19,8 +19,8 @@ import com.facebook.presto.spi.ConnectorSession;
 import com.facebook.presto.spi.Page;
 import com.facebook.presto.spi.block.Block;
 import com.facebook.presto.spi.block.BlockBuilder;
+import com.facebook.presto.spi.relation.RowExpression;
 import com.facebook.presto.spi.type.Type;
-import com.facebook.presto.sql.relational.RowExpression;
 
 import java.lang.invoke.MethodHandle;
 
@@ -69,7 +69,7 @@ public class GeneratedPageProjection
     {
         blockBuilder = blockBuilder.newBlockBuilderLike(null);
         try {
-            return (Work<Block>) pageProjectionWorkFactory.invoke(blockBuilder, session, yieldSignal, page, selectedPositions);
+            return (Work<Block>) pageProjectionWorkFactory.invoke(blockBuilder, session, page, selectedPositions);
         }
         catch (Throwable e) {
             throw new RuntimeException(e);
